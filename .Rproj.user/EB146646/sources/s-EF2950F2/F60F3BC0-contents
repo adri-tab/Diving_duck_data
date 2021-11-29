@@ -1,0 +1,146 @@
+library(rpostgis)
+library(sf)
+library(tidyverse)
+
+utf8_transfo <- dget('./Code/functions_own.R') %>% pluck('utf8_transfo')
+
+# con <- dbConnect(PostgreSQL(),
+#                  dbname = "petite_faune_sedentaire",
+#                  host = "localhost",
+#                  port = 5432,
+#                  user = "postgres",
+#                  password = rstudioapi::askForPassword("Mot de passe PFS ?"))
+
+con <- dbConnect(PostgreSQL(),
+                 dbname = "portail_oncfs",
+                 host = "192.168.4.9",
+                 port = 5438,
+                 user = "adm.lievre",
+                 password = "M@sterL!3vr3")
+
+vegetation <- tbl(con, sql('select * from rec_lievre.dic_vegetation')) %>% collect %>% utf8_transfo
+etat_culture <- tbl(con, sql('select * from rec_lievre.dic_etat_culture')) %>% collect %>% utf8_transfo
+
+etat_culture <- bind_cols(etat_culture, 
+                          tibble(str_detection=list(
+                            non_renseigne = NA_character_,
+                            indetermine = NA_character_,
+                            semis = c('sem'),
+                            sur_pied = NA_character_,
+                            repousse = c('rep.','rep ','rp.','rp', 'rb'),
+                            dechaume = c('dch','dech'),
+                            chaume = c('ch ','ch.','chaume','rec.','recol','fauche','broye','coupe','tig')
+                          )))
+
+vegetation <- bind_cols(vegetation, 
+                        tibble(str_detection=list(
+                          
+                          # pas 'dinfo
+                          non_renseigne = NA_character_,
+                          indetermine = NA_character_,
+                          
+                          # pauvre
+                          terre_nue = c('terre nu','tn','lab'),
+                          
+                          roseau = c('phragmites','roseau'),
+                          
+                          # ligneux
+                          friche = c('chasse','fri','lim fr'),
+                          
+                          buisson = c('buis'),
+                          
+                          haie = c('haie'),
+                          
+                          bosquet = c('bosq'),
+                          
+                          bois = c('bois','peuple'),
+                          
+                          cassis = c('cassis'),
+                          
+                          vergers = c('vergers'),
+                          
+                          # graminees_cereales
+                          ble = c(' bl','ble'),
+                          
+                          orge = c('escargeon','escourgeon','esc','orge',' or'),
+                          
+                          avoine = c('avoine'),
+                          
+                          millet = c('millet'),
+                          
+                          seigle = c('seigle'),
+                          
+                          sorgho = c('sorgho'),
+                          
+                          epeautre = c('epeautre'),
+                          
+                          mais = c('mais',' ma'),
+                          
+                          cereales_indeter = c('00000'),
+                          
+                          # graminees_autres
+                          prairie_pat = c('paturées'),
+                          
+                          prairie_fauch = c('fauchées'),
+                          
+                          prairie_indeter = c('prairie', 'herbe','herb'),
+                          
+                          jachere = c('jach','jfs'),
+                          
+                          bord_de_voie = c('chem','rout'),
+                          
+                          ray_grass = c('ray gras'),
+                          
+                          # oleagineuse 
+                          moutarde = c('moutarde','mouta'),
+                          
+                          tournesol = c('tounesol',' to','to ','tour'),
+                          
+                          colza = c('co ','co/',' co','colza'),
+                          
+                          lin = c('00000'),
+                          
+                          # proteagineuse
+                          pois = c(' po','po ','pois'),
+                          
+                          feve = c('fev','fcves'),
+                          
+                          luzerne = c('luz'),
+                          
+                          lentille = c('lent'),
+                          
+                          haricot = c('hari'),
+                          
+                          soja = c('soja'),
+                          
+                          trefle = c('tefle','trefle'),
+                          
+                          # tubercule_bulbe_cucurbitacee
+                          betterave = c('bett'),
+                          
+                          carotte = c('carott'),
+                          
+                          radis = c('radis'),
+                          
+                          pomme_de_terre = c('patate','pomme'),
+                          
+                          chicoree = c('chicoree'),
+                          
+                          oignon = c('oig'),
+                          
+                          cucurbitacee = c('citrouil','potiron'),
+                          
+                          # culture_autre
+                          pavot = c('pavot','pav'),
+                          
+                          phacelie = c('phacélie'),
+                          
+                          endive = c('endive')
+                        )
+                        )
+)
+
+write_rds(etat_culture,'./Data/Maves_VHF_2003-2007/nettoyage_cultures/etat_culture.rds')
+write_rds(vegetation,'./Data/Maves_VHF_2003-2007/nettoyage_cultures/vegetation.rds')
+
+dbDisconnect(con)
