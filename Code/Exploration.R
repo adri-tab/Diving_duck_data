@@ -105,7 +105,7 @@ l1 %>%
          DATE_IMPORT, NUMERO_IMPORT, REMARQUES) %>% 
   arrange(obs, datetime, sp, ring) -> l2[[2]] 
 
-# t_controle_coo
+# t_controle_coo ~ 200 données perdues
 l1 %>% 
   pluck(3) %>% 
   filter(ESPECE %in% c("AYTFER", "AYTFUL"), 
@@ -169,20 +169,31 @@ l1 %>%
          SEXE, AGE, POIDS, COND, REMARQUES) %>% 
     arrange(obs, datetime, sp, ring) -> l2[[4]]
 
-# junction check 
+
+# First filtering -------------------------------------------------------------------
+
 l3 <- list()
 
-# capture slmt
+# capture slmt : - 50 données
 l2 %>% 
   pluck(1) %>% 
   filter(obs == "BAGUAGE") -> l3[[1]]
 
-# on vire duplicatat
+# on vire duplicata de baguage : - 2 données
 l3 %>% 
   pluck(1) %>% 
   filter(!duplicated(.)) %>% 
   arrange(datetime, sp, ring) -> l3[[1]]
 
+# on vire les autres duplicata de baguage
+l3 %>% 
+  pluck(1) %>% 
+  add_count(ring) %>% 
+  filter(n > 1) %>% 
+  slice(c(1, 3, 5)) -> to_rm_1
+
+anti_join(l3 %>% pluck(1), to_rm_1) -> l3[[1]]
+  
 # fusion des controles et restriction sur les capturés des sites choisis
 l2 %>% 
   pluck(1) %>% 
@@ -191,31 +202,100 @@ l2 %>%
   filter(ring %in% (l3 %>% pluck(1) %>% pull(ring))) %>% 
   filter(!duplicated(.)) -> l3[[2]]
 
-# doublon avec marques différentes  
+# couple bague marque de référence
+l3 %>% 
+  pluck(1) %>% 
+  select(ring, `CODE MARQUE`) %>% 
+  filter(!is.na(`CODE MARQUE`)) -> good_couple
+
+# nbses marques correspondant à une mauvaise bague dans les contrôles.
+l3 %>% 
+  pluck(2) %>% 
+  anti_join(good_couple) %>% 
+  add_count(ring) %>% 
+  select(datetime, ring, sp, spot, `CODE MARQUE`, n) %>% 
+  left_join(good_couple, by = "ring") %>% 
+  arrange(desc(n), ring, datetime)
+
+# on garde seulement les NA, ou "non marque(e)"
+l3 %>% 
+  pluck(2) %>% 
+  semi_join(good_couple) %>% 
+  bind_rows(
+    anti_join(l3 %>% pluck(2), good_couple) %>% 
+      filter(is.na(`CODE MARQUE`) | str_detect(`CODE MARQUE`, "MARQUE"))) -> l3[[2]]
+
+# coordonnées des controles
 l2 %>% 
   pluck(3) %>% 
-  distinct(datetime, ring, lon, lat, `CODE MARQUE`) %>% 
-  add_count(datetime, ring, lat, lon) %>% 
-  filter(n > 1) %>% 
-  select(-n) -> to_remove; to_remove
-
-left_join(l3 %>% pluck(2) %>% rename(lon_c = lon, lat_c = lat), 
-          semi_join(
-            l2 %>% pluck(3) %>% select(datetime, ring, lon, lat),
-            to_remove) %>% 
-  add_count(datetime, ring, lon, lat)
+  count(datetime, ring) %>% 
+  filter(n > 1)
 
 l2 %>% 
   pluck(3) %>% 
-  
-  
+  group_by(datetime, ring) %>% 
+  summarize(across(c(lon, lat), mean),
+            across(contains("raw"), ~ .x %>%  pluck(1))) %>% 
+  ungroup() -> l3[[3]]
 
-# oiseaux bagués non controlés
-anti_join(l2 %>% pluck(1), l2 %>% pluck(2), by = "ring")
+# reprise formatting
+l2 %>% 
+  pluck(4) %>% 
+  filter(ring %in% (l3[[1]] %>% pull(ring))) -> l3[[4]]
 
-# oiseaux bagués repris
-semi_join(l2 %>% pluck(1), l2 %>% pluck(4), by = "ring")
 
-# oiseaux bagués non controlés, non repris
-anti_join(l2 %>% pluck(1), l2 %>% pluck(2), by = "ring") %>% 
-  anti_join(l2 %>% pluck(4), by = "ring")
+# Fusion des controles avec les coordonnées -----------------------------------------
+
+list() -> l4
+
+l3[[1]] -> l4[[1]]
+
+# data with coordinates in the second tibble
+inner_join(l3[[2]] %>% select(-starts_with(c("lon", "lat", "raw"))), 
+           l3[[3]]) -> l4[[2]]
+
+# controle without coordinates
+anti_join(l3[[2]], l3[[3]] %>% select(1:2)) %>% nrow()
+
+anti_join(l3[[2]], l3[[3]] %>% select(1:2)) %>% 
+  filter(!is.na(lon), !is.na(lat)) -> lon_lat; lon_lat
+
+anti_join(l3[[2]], l3[[3]] %>% select(1:2)) %>% 
+  filter(is.na(lon) | is.na(lat)) %>% 
+  filter(!is.na(com), !is.na(spot)) -> to_be_found
+
+bind_rows(l4[[2]], lon_lat, to_be_found) -> l4[[2]]
+
+l3[[4]] -> l4[[3]]
+
+
+# Data counts -----------------------------------------------------------------------
+
+# oiseaux bagués
+l4 %>% pluck(1) %>% nrow()
+
+# oiseaux controlés
+semi_join(l4 %>% pluck(1), l4 %>% pluck(2), by = "ring") %>% 
+  nrow()
+
+# oiseaux repris
+semi_join(l4 %>% pluck(1), l4 %>% pluck(3), by = "ring") %>% 
+  nrow()
+
+# oiseaux controlés & repris
+semi_join(l4 %>% pluck(1), l4 %>% pluck(2), by = "ring") %>% 
+  semi_join(l4 %>% pluck(3), by = "ring") %>% nrow()
+
+# oiseaux controlés &/ou repris
+bind_rows(semi_join(l4 %>% pluck(1), l4 %>% pluck(2), by = "ring"), 
+          semi_join(l4 %>% pluck(1), l4 %>% pluck(3), by = "ring")) %>% 
+  distinct() %>% nrow()
+
+# oiseaux non controlés & non repris
+anti_join(l4 %>% pluck(1), l4 %>% pluck(2), by = "ring") %>% 
+  anti_join(l4 %>% pluck(3), by = "ring") %>% nrow()
+
+
+# Coordinates check by mapping ------------------------------------------------------
+
+l4
