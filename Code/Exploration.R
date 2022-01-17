@@ -303,7 +303,6 @@ l4 %>%
   st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
   arrange(com, spot) -> posi
 
-
 leaflet() %>%
   setView(lng = 3.4, lat = 47, zoom = 6) %>%
   addProviderTiles(providers$Esri.WorldGrayCanvas,
@@ -356,8 +355,8 @@ l4 %>%
         mutate(id = str_c(rowid, ".", obs)) %>% 
         select(id, co, dpt, com, spot, lon, lat)) %>% 
   reduce(bind_rows) %>% 
-  filter(!is.na(lon), !is.na(lat)) %>% 
-  left_join(l1 %>% pluck()) -> spots
+  filter(!is.na(lon), !is.na(lat)) -> spots
+# %>% left_join(l1 %>% pluck())
 
 spots %>% 
   count(co) %>% 
