@@ -5,8 +5,8 @@ require(tidyverse)
 require(readxl)
 require(lubridate)
 require(sf)
-library(leaflet)
-library(htmlwidgets)
+require(leaflet)
+require(htmlwidgets)
 
 options(viewer = NULL) 
 
@@ -449,3 +449,4 @@ map_base %>%
             colors = ~ colo, 
             title = NULL, 
             opacity = 0.7) -> map_2; map2
+
