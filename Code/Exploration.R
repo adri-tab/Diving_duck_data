@@ -168,7 +168,6 @@ l1 %>%
          SEXE, AGE, POIDS, COND, REMARQUES) %>% 
     arrange(obs, datetime, sp, ring) -> l2[[4]]
 
-
 # First filtering -------------------------------------------------------------------
 
 l3 <- list()
@@ -266,7 +265,6 @@ bind_rows(l4[[2]], lon_lat, to_be_found) -> l4[[2]]
 
 l3[[4]] -> l4[[3]]
 
-
 # Data counts -----------------------------------------------------------------------
 
 # oiseaux bagués
@@ -332,12 +330,15 @@ map_base %>%
                                   "Fond satellite",
                                   "Fond topographie"),
                    overlayGroups = unique(posi$com),
-                   options = layersControlOptions(collapsed = FALSE)) -> map_1
+                   options = layersControlOptions(collapsed = FALSE)) -> map_1; map_1
 
-withr::with_dir('Output', saveWidget(widget = map_1, 
-                                  file = "position_com.html",
-                                  selfcontained = TRUE))
 
+
+# withr::with_dir('Output', saveWidget(widget = map_1, 
+#                                   file = "position_com.html",
+#                                   selfcontained = TRUE))
+
+rm(map_1)
 
 # Coordinates checking by country ----------------------------------------------------
 
@@ -356,7 +357,6 @@ l4 %>%
         select(id, co, dpt, com, spot, lon, lat)) %>% 
   reduce(bind_rows) %>% 
   filter(!is.na(lon), !is.na(lat)) -> spots
-# %>% left_join(l1 %>% pluck())
 
 spots %>% 
   count(co) %>% 
@@ -399,20 +399,28 @@ spots %>%
 
 # does it fall in the countries? 
 spots %>% 
-  filter(!is.na(lon), !is.na(lat)) %>% 
-  left_join(cos %>% mutate(co = name %>% str_to_upper()) %>% select(co), by = "co") %>% 
-  rowwise() %>% 
-  mutate(geom2 = c(lon, lat) %>% st_point() %>% st_sfc(crs = 4326)) %>% 
-  ungroup() -> spots2
+  filter(!is.na(lon), !is.na(lat), 
+         lon >= -90, lon <= 90,
+         lat >= -90, lat <= 90) %>% 
+  left_join(cos %>% 
+              mutate(co = name %>% str_to_upper()) %>% 
+              select(co), 
+            by = "co") -> spot_base
 
-spots2 %>% 
-  rowwise() %>% 
-  mutate(dist = st_distance(geom2, geometry)) %>% 
-  ungroup() -> spot3
+spot_base %>% 
+  mutate(geom2 = spot_base %>% 
+           select(lon, lat) %>% 
+           st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+           pull(geometry)) -> spot2
+
+# long calcul
+spot2 %>% 
+  mutate(dist = st_distance(geom2, geometry, by_element = TRUE)) -> spot3
 
 spot3 %>% 
   select(id, co, com, spot, geom2, dist) %>% 
   mutate(across(dist, ~ .x %>% as.numeric() %>% "*"(10^-3) %>% round()),
+         across(c(id, co, com, spot), str_replace_na),
          spot_full = str_c(id, co, com, spot, sep = " / ")) %>% 
   filter(dist > 0) %>% 
   arrange(co, com, spot, desc(dist)) -> spot4; spot4
@@ -448,5 +456,322 @@ map_base %>%
             labels = ~ co,
             colors = ~ colo, 
             title = NULL, 
-            opacity = 0.7) -> map_2; map2
+            opacity = 0.7) -> map_2; map_2
 
+rm(map_2)
+
+# Corrections -----------------------------------------------------------------------
+
+# Belgique
+spot_base %>% 
+  filter(id %in% c("11719.CONTROLE", "11720.CONTROLE")) %>% 
+  mutate(lon = abs(lon)) -> modif
+
+# Denmark -> ok
+
+# Finland -> ok
+
+# Netherlands
+spot_base %>% 
+  filter(id %in% c("192.REPRISE")) %>% 
+  mutate(lat = lat - 1) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("2920.CONTROLE")) %>% 
+  mutate(co = "BELGIUM") %>% 
+  bind_rows(modif) -> modif
+
+# Portugal
+spot_base %>% 
+  filter(id %in% c("4122.CONTROLE")) %>% 
+  mutate(co = "SPAIN") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("6720.CONTROLE")) %>% 
+  mutate(lon = lon - 5) %>% 
+  bind_rows(modif) -> modif
+
+# Russia -> ok
+
+# Spain
+spot_base %>% 
+  filter(id %in% c("15248.CONTROLE")) %>% 
+  mutate(lon = -lon) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("13376.CONTROLE")) %>% 
+  mutate(lon = -lon) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("7576.CONTROLE")) %>% 
+  mutate(lat = 43.537) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("15192.CONTROLE", "15244.CONTROLE", "15263.CONTROLE", "15280.CONTROLE", 
+                   "18368.CONTROLE", 
+                   "10133.CONTROLE", "10153.CONTROLE", "10205.CONTROLE",
+                   "12804.CONTROLE",
+                   "9124.CONTROLE",
+                   "15283.CONTROLE")) %>% 
+  mutate(lon = -lon) %>% 
+  bind_rows(modif) -> modif
+
+# Sweden -> ok
+
+# Switzerland
+spot_base %>% 
+  filter(id %in% c("19999.CONTROLE")) %>% 
+  mutate(lat = lat + .2) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("7939.CONTROLE", "10159.CONTROLE")) %>% 
+  mutate(lat = lat - 1) %>% 
+  bind_rows(modif) -> modif
+
+# UK
+spot_base %>% 
+  filter(id %in% c("26238.CONTROLE")) %>% 
+  mutate(lon = -lon) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("500.REPRISE")) %>% 
+  mutate(lat = lat - 8) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("500.REPRISE")) %>% 
+  mutate(lat = lat - 8) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("16708.CONTROLE")) %>% 
+  mutate(lon = lon - 2) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("23853.CONTROLE")) %>% 
+  mutate(lon = -lon) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("15337.CONTROLE",
+                   "4605.CONTROLE")) %>% 
+  mutate(lat = lat + 10) %>% 
+  bind_rows(modif) -> modif
+
+# France
+
+spot_base %>% 
+  filter(id %in% c("8879.CONTROLE", "8912.CONTROLE", "8939.CONTROLE", 
+                   "25841.CONTROLE",
+                   "10008.CONTROLE", "10663.CONTROLE",
+                   "563.REPRISE",
+                   "6628.CONTROLE")) %>% 
+  mutate(co = "GERMANY") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("12051.CONTROLE", "12092.CONTROLE", "12181.CONTROLE",
+                   "12076.CONTROLE",
+                   "8272.CONTROLE")) %>% 
+  mutate(co = "POLAND") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("7955.CONTROLE", "8075.CONTROLE",
+                   "10782.CONTROLE",
+                   "13323.CONTROLE",
+                   "7366.CONTROLE", "7370.CONTROLE",
+                   "15294.CONTROLE",
+                   "9054.CONTROLE",
+                   "25847.CONTROLE",
+                   "25583.CONTROLE")) %>% 
+  mutate(co = "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("8944.CONTROLE", "8945.CONTROLE", 
+                   "10145.CONTROLE", 
+                   "23938.CONTROLE",
+                   "8268.CONTROLE")) %>% 
+  mutate(co = "BELGIUM") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("6206.CONTROLE", "1008.CONTROLE", 
+                   "10957.CONTROLE", "10962.CONTROLE", 
+                   "6421.CONTROLE",
+                   "12622.CONTROLE", "12621.CONTROLE",
+                   "10966.CONTROLE")) %>% 
+  mutate(co = "SWITZERLAND") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("23928.CONTROLE", 
+                   "11969.CONTROLE",
+                   "27113.CONTROLE",
+                   "6251.CONTROLE", 
+                   "9277.CONTROLE")) %>% 
+  mutate(co = "SPAIN") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("568.REPRISE", 
+                   "145.REPRISE",
+                   "894.REPRISE",
+                   "751.REPRISE", "796.REPRISE",  
+                   "794.REPRISE")) %>% 
+  mutate(co = "RUSSIAN FEDERATION") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("568.REPRISE", 
+                   "145.REPRISE",
+                   "894.REPRISE",
+                   "751.REPRISE", "752.REPRISE", 
+                   "796.REPRISE",  
+                   "794.REPRISE")) %>% 
+  mutate(co = "RUSSIAN FEDERATION") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("10627.CONTROLE", 
+                   "4681.CONTROLE",
+                   "5688.CONTROLE",
+                   "737.REPRISE")) %>% 
+  mutate(co = "NETHERLANDS") %>% 
+  bind_rows(modif) -> modif
+
+#French commune to check
+spot5 %>% 
+  filter(co == "FRANCE", !id %in% modif$id) %>% 
+  mutate(id_co = com %>% as_factor() %>% as.numeric(),
+         colo = hcl(h = seq(15, 300, length = max(id_co)), 
+                    l = 65, 
+                    c = 100)[id_co]) -> commune
+
+map_base %>% 
+  addCircleMarkers(
+    data = commune,
+    group = ~ com,
+    radius = ~ 15 * log10(1 + 1),
+    fillColor = ~ colo,
+    fillOpacity = 0.7,
+    stroke = TRUE,
+    color = "#696773",
+    opacity = 0.7,
+    weight = 2,
+    label = ~ spot_full) %>%
+  addLayersControl(position = "topleft",
+                   baseGroups = c("Fond clair",
+                                  "Fond noir", 
+                                  "Fond satellite",
+                                  "Fond topographie"),
+                   overlayGroups = unique(commune$com),
+                   options = layersControlOptions(collapsed = FALSE)) -> map_3; map_3
+
+rm(map_3)
+
+# Balloy
+spot_base %>% 
+  filter(id %in% c("403.BAGUAGE")) %>% 
+  mutate(lat = lat + 20) %>% 
+  bind_rows(modif) -> modif
+
+# Barbatre ok
+
+# Bistroff
+spot_base %>% 
+  filter(id %in% c("18201.CONTROLE")) %>% 
+  mutate(lat = lat + 2) %>% 
+  bind_rows(modif) -> modif
+
+# Calais
+spot_base %>% 
+  filter(id %in% c("944.REPRISE")) %>% 
+  mutate(lon = -lon) %>% 
+  bind_rows(modif) -> modif
+
+# Cappy
+spot_base %>% 
+  filter(id %in% c("829.REPRISE")) %>% 
+  mutate(lat = lat + 30) %>% 
+  bind_rows(modif) -> modif
+
+# Cappy
+spot_base %>% 
+  filter(id %in% c("987.REPRISE")) %>% 
+  rename(lon = lat, 
+         lat = lon) %>%  
+  bind_rows(modif) -> modif
+
+# Etaples
+spot_base %>% 
+  filter(id %in% c("11990.CONTROLE")) %>% 
+  mutate(lon = -lon) %>%  
+  bind_rows(modif) -> modif
+
+# Frossay ok
+
+# GONDREVILLE-L'ORCHER
+spot_base %>% 
+  filter(id %in% c("4661.CONTROLE", "4665.CONTROLE")) %>% 
+  mutate(lat = lat - .4) %>%  
+  bind_rows(modif) -> modif
+
+# Grand Lavier
+spot_base %>% 
+  filter(id %in% c("26225.CONTROLE")) %>% 
+  mutate(lon = -lon) %>%  
+  bind_rows(modif) -> modif
+
+# Havre ok
+
+# ile d'olonne
+spot_base %>% 
+  filter(id %in% c("16852.CONTROLE", "16969.CONTROLE")) %>% 
+  mutate(lat = lat + 1) %>%  
+  bind_rows(modif) -> modif
+
+# jard sur mer ok
+
+# la benne ok
+
+# lundon medoc ok
+
+# macau ok
+
+# marsilly ok
+
+# meazangers
+spot_base %>% 
+  filter(id %in% c("5506.BAGUAGE")) %>% 
+  rename(lon = lat, 
+         lat = lon) %>% 
+  mutate(lat = -lat) %>% 
+  bind_rows(modif) -> modif
+
+# MORTAGNE-SUR-GIRONDE ok
+
+# Noirmoutier ok
+
+# Saint-andre de seigneux 
+spot_base %>% 
+  filter(id %in% c("6335.CONTROLE")) %>% 
+  mutate(lat = lat + 1) %>% 
+  bind_rows(modif) -> modif
+
+# SAINT AYBERT ok
+
+# Saint georges sur loire
+spot_base %>% 
+  filter(id %in% c("6623.CONTROLE", "8557.CONTROLE")) %>% 
+  mutate(lon = lon + 2) %>% 
+  bind_rows(modif) -> modif
