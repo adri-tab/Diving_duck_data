@@ -7,6 +7,7 @@ require(lubridate)
 require(sf)
 require(leaflet)
 require(htmlwidgets)
+require(fuzzyjoin)
 
 options(viewer = NULL) 
 
@@ -460,7 +461,8 @@ map_base %>%
 
 rm(map_2)
 
-# Corrections -----------------------------------------------------------------------
+
+# Corrections : check dans le pays --------------------------------------------------
 
 # Belgique
 spot_base %>% 
@@ -538,11 +540,6 @@ spot_base %>%
 spot_base %>% 
   filter(id %in% c("26238.CONTROLE")) %>% 
   mutate(lon = -lon) %>% 
-  bind_rows(modif) -> modif
-
-spot_base %>% 
-  filter(id %in% c("500.REPRISE")) %>% 
-  mutate(lat = lat - 8) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
@@ -786,12 +783,6 @@ spot_base %>%
   
 # saint philbert
 spot_base %>% 
-  filter(spot %>% str_detect("ARCHE|BONHOMME")) %>% 
-  mutate(lon = -1.65611111111111,
-         lat = 47.0841666666667) %>% 
-  bind_rows(modif) -> modif
-
-spot_base %>% 
   filter(id %in% (commune %>% filter(com %>% str_detect("PHILBERT")) %>% pull(id))) %>% 
   mutate(lon = -1.65611111111111,
          lat = 47.0841666666667) %>% 
@@ -822,7 +813,108 @@ spot_base %>%
 
 # VAL-DE-REUIL
 spot_base %>% 
+  filter(id == "5615.CONTROLE") %>% 
+  mutate(lat = lat + 40) %>%
+bind_rows(modif) -> modif
+
+# VILLARS-LES-DOMBES
+spot_base %>% 
   filter(id == "7768.CONTROLE") %>% 
-  mutate(lat = lat - 4) %>% view
+  mutate(lat = lat - 4) %>%
   bind_rows(modif) -> modif
 
+# VILLENEUVE-LA-GUYARD
+spot_base %>% 
+  filter(id == "412.REPRISE") %>% 
+  mutate(co = "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND",
+         dpt = NA_character_,
+         com = "ASHBOURNE",
+         spot = "CARSINGTON WATER") %>%
+  bind_rows(modif) -> modif
+
+anti_join(spot_base, modif, by = "id") %>% 
+  bind_rows(modif) %>% 
+  select(-geometry) %>% 
+  mutate(across(c(co, com, spot), 
+                ~ .x %>% 
+                  iconv(from = "UTF-8", to = "ASCII//TRANSLIT") %>% # remove accent
+                  str_to_upper())) -> spot_base2
+
+# Corrections par nom de commune / spot -----------------------------------------------
+
+l1 %>% 
+  pluck(6) %>% 
+  select(co = PAYS, dpt = DEPARTEMENT, com = COMMUNE, spot = `LIEU-DIT`, 6:11) %>% 
+  mutate(dir_lon = if_else(LONG_DEG %>% str_detect("-"), -1, 1),
+         dir_lat = if_else(LAT_DEG %>% str_detect("-"), -1, 1),
+         across(c(LONG_DEG, LONG_MIN, LONG_SEC, LAT_DEG, LAT_MIN, LAT_SEC), 
+                ~ .x %>%
+                  as.numeric() %>% 
+                  abs()),
+         lon = dir_lon * (LONG_DEG + LONG_MIN / 60 + LONG_SEC / 60^2),
+         lat = dir_lat * (LAT_DEG + LAT_MIN / 60 + LAT_SEC / 60^2)) %>% 
+  select(1:4, 13:14) %>%
+  filter(!(is.na(lon) | is.na(lat))) %>% 
+  mutate(across(c(co, com, spot), 
+                ~ .x %>% 
+                  iconv(from = "UTF-8", to = "ASCII//TRANSLIT") %>% # remove accent
+                  str_to_upper()), 
+         co = case_when(
+           co == "CHOLET" ~ "FRANCE", 
+           co == "UK" ~ "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND", 
+           TRUE ~ co)) %>% 
+  arrange(co, com, spot) -> of_spot
+
+l1 %>% 
+  pluck(5) %>% 
+  select(co = `Code pays`, com = Nom, starts_with(c("Long", "Lat"))) %>% 
+  mutate(dir_lon = if_else(Long_de %>% str_detect("-"), -1, 1),
+         dir_lat = if_else(Lat_de %>% str_detect("-"), -1, 1),
+         across(c(Long_de, Long_min, Long_sec, Lat_de, Lat_min, Lat_sec), 
+                ~ .x %>%
+                  as.numeric() %>% 
+                  abs()),
+         lon = dir_lon * (Long_de + Long_min / 60 + 
+                            if_else(is.na(Long_sec), 0, Long_sec) / 60^2),
+         lat = dir_lat * (Lat_de + Lat_min / 60 + 
+                            if_else(is.na(Lat_sec), 0, Lat_sec) / 60^2)) %>% 
+  select(co, com, lon, lat) %>% 
+  filter(!(is.na(lon) | is.na(lat))) %>% 
+  mutate(across(c(co, com), 
+                ~ .x %>% 
+                  iconv(from = "UTF-8", to = "ASCII//TRANSLIT") %>% # remove accent
+                  str_to_upper()), 
+         co = case_when(
+           co == "AU" ~ "AUSTRIA", 
+           co == "BL" ~ "BELGIUM",
+           co == "BY" ~ "BELARUS", 
+           co == "DE" ~ "GERMANY", 
+           co == "DK" ~ "DENMARK", 
+           co == "ER" ~ "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND", 
+           co == "ES" ~ "SPAIN", 
+           co == "ET" ~ "ESTONY", 
+           co == "FR" ~ "FRANCE", 
+           co == "GB" ~ "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND", 
+           co == "HE" ~ "SWITZERLAND", 
+           co == "HG" ~ "HUNGARY", 
+           co == "IA" ~ "ITALY", 
+           co == "LI" ~ "LITUANY", 
+           co == "LV" ~ "LETTONY", 
+           co == "NL" ~ "NETHERLANDS", 
+           co == "NO" ~ "NORWAY",
+           co == "NV" ~ "NETHERLANDS",
+           co == "PL" ~ "POLAND",
+           co == "PO" ~ "PORTUGAL",
+           co == "RU" ~ "RUSSIAN FEDERATION",
+           co == "SF" ~ "FINLAND",
+           co == "SK" ~ "SLOVAKY",
+           co == "SV" ~ "SLOVENY",
+           co == "TU" ~ "TURKY",
+           co == "UK" ~ "UKRAINE", 
+           TRUE ~ co)) %>% 
+  arrange(co, com) %>% 
+  filter(co %in% unique(spot_base2$co)) -> of_com
+
+spot_base2 %>% 
+  filter(!is.na(co), !is.na(com), !is.na(spot)) %>% 
+  stringdist_left_join(of_spot %>% filter(!is.na(spot)), by = c("co", "com", "spot"))
