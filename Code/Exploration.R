@@ -626,15 +626,6 @@ spot_base %>%
   filter(id %in% c("568.REPRISE", 
                    "145.REPRISE",
                    "894.REPRISE",
-                   "751.REPRISE", "796.REPRISE",  
-                   "794.REPRISE")) %>% 
-  mutate(co = "RUSSIAN FEDERATION") %>% 
-  bind_rows(modif) -> modif
-
-spot_base %>% 
-  filter(id %in% c("568.REPRISE", 
-                   "145.REPRISE",
-                   "894.REPRISE",
                    "751.REPRISE", "752.REPRISE", 
                    "796.REPRISE",  
                    "794.REPRISE")) %>% 
@@ -647,6 +638,11 @@ spot_base %>%
                    "5688.CONTROLE",
                    "737.REPRISE")) %>% 
   mutate(co = "NETHERLANDS") %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("652.REPRISE")) %>% 
+  mutate(co = "ITALY") %>% 
   bind_rows(modif) -> modif
 
 #French commune to check
@@ -773,5 +769,60 @@ spot_base %>%
 # Saint georges sur loire
 spot_base %>% 
   filter(id %in% c("6623.CONTROLE", "8557.CONTROLE")) %>% 
-  mutate(lon = lon + 2) %>% 
+  mutate(lon = -0.703333) %>% 
   bind_rows(modif) -> modif
+
+# Saint jean de thurigneux
+spot_base %>% 
+  filter(id %in% c("13444.CONTROLE")) %>% 
+  mutate(lat = lat + 30) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% c("8905.CONTROLE")) %>% 
+  mutate(lon = lon + 41) %>%
+  rename(lon = lat, lat = lon) %>% 
+  bind_rows(modif) -> modif
+  
+# saint philbert
+spot_base %>% 
+  filter(spot %>% str_detect("ARCHE|BONHOMME")) %>% 
+  mutate(lon = -1.65611111111111,
+         lat = 47.0841666666667) %>% 
+  bind_rows(modif) -> modif
+
+spot_base %>% 
+  filter(id %in% (commune %>% filter(com %>% str_detect("PHILBERT")) %>% pull(id))) %>% 
+  mutate(lon = -1.65611111111111,
+         lat = 47.0841666666667) %>% 
+  bind_rows(modif) -> modif
+
+# SAINT-ROMAIN-SUR-GIRONDE
+spot_base %>% 
+  filter(id == "593.REPRISE") %>% 
+  rename(lon = lat,
+         lat = lon) %>% 
+  bind_rows(modif) -> modif
+
+# SAINTES-MARIES-DE-LA-MER
+spot_base %>% 
+  filter(id == "628.REPRISE") %>% 
+  mutate(lat = lat + 0.05) %>% 
+  bind_rows(modif) -> modif
+
+# SANDOUVILLE ok
+
+# TRANCHE SUR MER ok
+
+# TREGUENNEC
+spot_base %>% 
+  filter(id == "10377.CONTROLE") %>% 
+  mutate(lon = -4.33502778) %>%
+  bind_rows(modif) -> modif
+
+# VAL-DE-REUIL
+spot_base %>% 
+  filter(id == "7768.CONTROLE") %>% 
+  mutate(lat = lat - 4) %>% view
+  bind_rows(modif) -> modif
+
