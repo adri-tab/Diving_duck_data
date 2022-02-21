@@ -354,18 +354,6 @@ cos %>%
 l4 %>% 
   map(~ .x %>% 
         rowid_to_column() %>% 
-        mutate(id = str_c(rowid, ".", obs)) %>% 
-        select(id, co, dpt, com, spot, lon, lat)) %>% 
-  reduce(bind_rows) %>% 
-  filter(!is.na(lon), !is.na(lat)) -> spots
-
-spots %>% 
-  count(co) %>% 
-  view()
-
-l4 %>% 
-  map(~ .x %>% 
-        rowid_to_column() %>% 
         mutate(id = str_c(rowid, ".", obs), 
                co = co %>% 
                  iconv(from = "UTF-8", to = "ASCII//TRANSLIT") %>% # remove accent
@@ -851,10 +839,10 @@ l1 %>%
                 ~ .x %>%
                   as.numeric() %>% 
                   abs()),
-         lon = dir_lon * (LONG_DEG + LONG_MIN / 60 + LONG_SEC / 60^2),
-         lat = dir_lat * (LAT_DEG + LAT_MIN / 60 + LAT_SEC / 60^2)) %>% 
+         lon_2 = dir_lon * (LONG_DEG + LONG_MIN / 60 + LONG_SEC / 60^2),
+         lat_2 = dir_lat * (LAT_DEG + LAT_MIN / 60 + LAT_SEC / 60^2)) %>% 
   select(1:4, 13:14) %>%
-  filter(!(is.na(lon) | is.na(lat))) %>% 
+  filter(!(is.na(lon_2) | is.na(lat_2))) %>% 
   mutate(across(c(co, com, spot), 
                 ~ .x %>% 
                   iconv(from = "UTF-8", to = "ASCII//TRANSLIT") %>% # remove accent
@@ -863,23 +851,27 @@ l1 %>%
            co == "CHOLET" ~ "FRANCE", 
            co == "UK" ~ "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND", 
            TRUE ~ co)) %>% 
-  arrange(co, com, spot) -> of_spot
+  group_by(co, com, spot) %>% 
+  summarize(across(c(lon_2, lat_2), mean)) %>% 
+  ungroup() %>% 
+  arrange(co, com, spot) %>% 
+  rowid_to_column("id_spo") -> of_spot
 
 l1 %>% 
   pluck(5) %>% 
-  select(co = `Code pays`, com = Nom, starts_with(c("Long", "Lat"))) %>% 
+  select(co = `Code pays`, com = Nom, dpt = `Dept français`, starts_with(c("Long", "Lat"))) %>% 
   mutate(dir_lon = if_else(Long_de %>% str_detect("-"), -1, 1),
          dir_lat = if_else(Lat_de %>% str_detect("-"), -1, 1),
          across(c(Long_de, Long_min, Long_sec, Lat_de, Lat_min, Lat_sec), 
                 ~ .x %>%
                   as.numeric() %>% 
                   abs()),
-         lon = dir_lon * (Long_de + Long_min / 60 + 
+         lon_2 = dir_lon * (Long_de + Long_min / 60 + 
                             if_else(is.na(Long_sec), 0, Long_sec) / 60^2),
-         lat = dir_lat * (Lat_de + Lat_min / 60 + 
+         lat_2 = dir_lat * (Lat_de + Lat_min / 60 + 
                             if_else(is.na(Lat_sec), 0, Lat_sec) / 60^2)) %>% 
-  select(co, com, lon, lat) %>% 
-  filter(!(is.na(lon) | is.na(lat))) %>% 
+  select(co, com, dpt, lon_2, lat_2) %>% 
+  filter(!(is.na(lon_2) | is.na(lat_2))) %>% 
   mutate(across(c(co, com), 
                 ~ .x %>% 
                   iconv(from = "UTF-8", to = "ASCII//TRANSLIT") %>% # remove accent
@@ -892,14 +884,14 @@ l1 %>%
            co == "DK" ~ "DENMARK", 
            co == "ER" ~ "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND", 
            co == "ES" ~ "SPAIN", 
-           co == "ET" ~ "ESTONY", 
+           co == "ET" ~ "ESTONIA", 
            co == "FR" ~ "FRANCE", 
            co == "GB" ~ "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND", 
            co == "HE" ~ "SWITZERLAND", 
            co == "HG" ~ "HUNGARY", 
            co == "IA" ~ "ITALY", 
-           co == "LI" ~ "LITUANY", 
-           co == "LV" ~ "LETTONY", 
+           co == "LI" ~ "LITHUANIA", 
+           co == "LV" ~ "LATVIA", 
            co == "NL" ~ "NETHERLANDS", 
            co == "NO" ~ "NORWAY",
            co == "NV" ~ "NETHERLANDS",
@@ -907,14 +899,148 @@ l1 %>%
            co == "PO" ~ "PORTUGAL",
            co == "RU" ~ "RUSSIAN FEDERATION",
            co == "SF" ~ "FINLAND",
-           co == "SK" ~ "SLOVAKY",
-           co == "SV" ~ "SLOVENY",
-           co == "TU" ~ "TURKY",
+           co == "SK" ~ "SLOVAKIA",
+           co == "SV" ~ "SLOVENIA",
+           co == "TU" ~ "TURKEY",
            co == "UK" ~ "UKRAINE", 
            TRUE ~ co)) %>% 
-  arrange(co, com) %>% 
-  filter(co %in% unique(spot_base2$co)) -> of_com
+  arrange(co, com, dpt) %>% 
+  filter(co %in% unique(spot_base2$co)) %>% 
+  rowid_to_column("id_co") -> of_com
+
+# match exact par spot
+spot_base2 %>% 
+  filter(!is.na(co), 
+         !is.na(com), 
+         !is.na(spot)) %>% 
+  inner_join(of_spot %>% 
+               filter(!is.na(spot))) %>% 
+  select(-id_spo) -> match_spot1
+
+# fuzzy match exact par spot
+spot_base2 %>% 
+  filter(!is.na(co), 
+         !is.na(com), 
+         !is.na(spot), 
+         !id %in% match_spot1$id) %>% 
+  stringdist_inner_join(of_spot %>% 
+                         filter(!is.na(spot)),
+                       method = "jw",
+                       max_dist = .1, # 10% max de diff
+                       distance_col = "d") -> fuzzy_spot1
+
+fuzzy_spot1 %>% 
+  group_by(id) %>% 
+  nest() %>% 
+  mutate(data = 
+           data %>% 
+           map(~ .x %>% 
+                 mutate(d = co.d + com.d + spot.d) %>% 
+                 arrange(d) %>% 
+                 slice(1))) %>% 
+  unnest(data) %>% 
+  ungroup() %>% 
+  select(id, id_spo) %>% 
+  left_join(spot_base2) %>% 
+  left_join(of_spot %>% 
+              rename(co_2 = co, com_2 = com, spot_2 = spot), 
+            by = "id_spo") %>% 
+  select(-id_spo) -> fuzzy_spot2
+
+# match exact par commune
+spot_base2 %>% 
+  filter(!is.na(co), 
+         !is.na(com),
+         !is.na(dpt),
+         !id %in% c(match_spot1$id, fuzzy_spot2$id)) %>% 
+  inner_join(of_com %>%
+               filter(co == "FRANCE")) -> match_com1
 
 spot_base2 %>% 
-  filter(!is.na(co), !is.na(com), !is.na(spot)) %>% 
-  stringdist_left_join(of_spot %>% filter(!is.na(spot)), by = c("co", "com", "spot"))
+  filter(!is.na(co), 
+         !is.na(com),
+         !id %in% c(match_spot1$id, fuzzy_spot2$id)) %>% 
+  inner_join(of_com %>%
+               filter(co != "FRANCE") %>% 
+               select(-dpt)) %>% 
+  bind_rows(match_com1) %>% 
+  select(-id_co) -> match_com2
+
+# fuzzy match par commune
+spot_base2 %>% 
+  filter(!is.na(co), 
+         !is.na(com),
+         !is.na(dpt),
+         !id %in% c(match_spot1$id, fuzzy_spot2$id, match_com2$id)) %>% 
+  stringdist_inner_join(of_com %>%
+                          filter(co == "FRANCE"),
+                        method = "jw",
+                        max_dist = .1, # 10% max de diff
+                        distance_col = "d") -> fuzzy_com1
+
+spot_base2 %>% 
+  filter(!is.na(co), 
+         !is.na(com), 
+         !id %in% c(match_spot1$id, fuzzy_spot2$id, match_com2$id)) %>% 
+  stringdist_inner_join(of_com %>%
+                          filter(co != "FRANCE") %>% 
+                          select(-dpt),
+                        method = "jw",
+                        max_dist = .1, # 10% max de diff
+                        distance_col = "d") %>% 
+  bind_rows(fuzzy_com1) -> fuzzy_com2
+
+fuzzy_com2 %>% 
+  group_by(id) %>% 
+  nest() %>% 
+  mutate(data = 
+           data %>% 
+           map(~ .x %>% 
+                 mutate(d = co.d + com.d) %>% 
+                 arrange(d) %>% 
+                 slice(1))) %>% 
+  unnest(data) %>% 
+  ungroup() %>% 
+  select(id, id_co) %>% 
+  left_join(spot_base2) %>% 
+  left_join(of_com %>% 
+              rename(co_2 = co, com_2 = com) %>% 
+              select(-dpt), 
+            by = "id_co") %>% 
+  select(-id_co) -> fuzzy_com3
+
+list(match_spot1 %>% mutate(match = "spot"), 
+     fuzzy_spot2 %>% mutate(match = "spot"), 
+     match_com2 %>% mutate(match = "com"), 
+     fuzzy_com3 %>% mutate(match = "com")) %>% 
+  reduce(bind_rows) -> spot_match
+
+anti_join(spot_base2, spot_match) %>% 
+  bind_rows(spot_match) %>% 
+  mutate(match = if_else(is.na(match), "-", match)) -> spot_base3
+
+# analyse 
+spot_base3 %>% 
+  filter(!is.na(lon_2)) %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  mutate(geom = spot_base3 %>% 
+           filter(!is.na(lon_2)) %>% 
+           st_as_sf(coords = c("lon_2", "lat_2"), crs = 4326) %>% 
+           pull(geometry),
+         dist = st_distance(geometry, 
+                            geom, by_element = TRUE) * 10^-3, 
+         dist = as.numeric(dist)) -> check_dist
+
+check_dist %>% 
+  filter(dist > 15) %>% 
+  ggplot(aes(x = dist)) + 
+  geom_histogram()
+
+# on garde les coordonnées du spot qd distance > 15 km, ~ 1%
+# on garde aussi les non matchés, ~ 5.5%
+
+spot_base3 %>% 
+  left_join(check_dist %>% select(id, dist) %>% st_drop_geometry()) %>% 
+  mutate(lon = if_else(dist > 15 & !is.na(dist), lon_2, lon),
+         lat = if_else(dist > 15 & !is.na(dist), lat_2, lat)) %>% 
+  select(id, lon, lat) -> spot_base4
