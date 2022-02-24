@@ -1154,6 +1154,10 @@ l8 %>%
 
 rm(list = setdiff(ls(), c("l9", "map_base")))
 
+write_rds(l9, "Output/dataset_milouin_morillon.rds")
+
+# Exploration du jeu de données -----------------------------------------------------
+
 map_base %>% 
   addCircleMarkers(
     data = l9,
@@ -1180,9 +1184,9 @@ map_base %>%
             labels = ~ co,
             colors = ~ colo, 
             title = NULL, 
-            opacity = 0.7) -> map_2; map_2
+            opacity = 0.7) -> mp1; mp1
 
-rm(map_2)
+rm(mp1)
 
 
 
