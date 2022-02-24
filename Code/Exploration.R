@@ -1080,25 +1080,40 @@ check_dist %>%
 
 spot_base3 %>% 
   left_join(check_dist %>% select(id, dist) %>% st_drop_geometry()) %>% 
-  mutate(lon = if_else(dist > 15 & !is.na(dist), lon_2, lon),
-         lat = if_else(dist > 15 & !is.na(dist), lat_2, lat), 
-         co = if_else(!is.na(com_2), co_2, co),
-         com = if_else(!is.na(com_2), com_2, com),
-         com = if_else(!is.na(spot_2), spot_2, spot)) %>% 
+  mutate(
+    lon = if_else(is.na(lon), lon_2, lon),
+    lat = if_else(is.na(lat), lat_2, lat),
+    lon = if_else(dist > 15 & !is.na(dist), lon_2, lon),
+    lat = if_else(dist > 15 & !is.na(dist), lat_2, lat), 
+    co = if_else(!is.na(com_2), co_2, co),
+    com = if_else(!is.na(com_2), com_2, com),
+    com = if_else(!is.na(spot_2), spot_2, spot)) %>% 
   select(id, lon, lat, co, dpt, com, spot) -> spot_base4
-
-filtration
 
 # Cohérence de la timeline ----------------------------------------------------------
 
 l5 %>% 
   map(
     ~ .x %>%
-      select(id, obs, datetime, ring, wgh = POIDS) %>% 
+      select(id, obs, datetime, ring, sp, wgh = POIDS) %>% 
       mutate(wgh = as.numeric(wgh))) %>% 
   reduce(bind_rows) -> l6
 
-l6 %>%  
+l6 %>% 
+  distinct(ring, sp) %>% 
+  count(ring) %>% 
+  filter(n > 1) %>% 
+  pull(ring) -> sp_issue
+
+l6 %>% 
+  filter(ring %in% sp_issue) %>% 
+  arrange(ring, datetime) %>% 
+  view()
+
+c("29558.CONTROLE", "5757.CONTROLE", "70.CONTROLE") -> to_drop
+
+l6 %>% 
+  filter(!id %in% to_drop) %>% 
   arrange(ring, datetime) %>% 
   nest_by(ring) %>% 
   mutate(data = data %>% 
@@ -1107,10 +1122,68 @@ l6 %>%
            mutate(time = if_else(obs == "REPRISE", 1, 0) %>% cumsum(), 
                   time = if_else(obs == "REPRISE", 0, time)) %>% 
            filter(time == 0) %>% 
+           select(-time) %>% 
            list()) %>% 
-  unnest(data) %>% 
-  filter(time < 1)
   mutate(nobs = nrow(data),
          reprise = if_else(any(data$obs == "REPRISE"), TRUE, FALSE)) %>% 
+  unnest(data) -> l7
   
+l7 %>% 
+  ungroup() %>% 
+  select(-sp) %>% 
+  left_join(l5 %>% pluck(1) %>% select(id, sp, sex, age)) %>% 
+  left_join(spot_base4) %>% 
+  nest_by(ring) %>% 
+  mutate(data = data %>% 
+           mutate(sp = data$sp[1],
+                  sex = data$sex[1]) %>% list()) %>% 
+  unnest(data) %>% 
+  ungroup() %>% 
+  arrange(sp, sex, ring, datetime) %>%
+  select(-id) %>% 
+  rowid_to_column("id") %>% 
+  select(id, ring, obs, datetime, sp, sex, age, wgh, 
+         lon, lat, co, dpt, com, spot, nobs, reprise) -> l8
+
+l8 %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  mutate(id_co = co %>% as_factor() %>% as.numeric(),
+         colo = hcl(h = seq(15, 300, length = max(id_co)), 
+                    l = 65, 
+                    c = 100)[id_co]) -> l9
+
+rm(list = setdiff(ls(), c("l9", "map_base")))
+
+map_base %>% 
+  addCircleMarkers(
+    data = l9,
+    group = ~ co,
+    radius = ~ 15 * log10(1 + 1),
+    fillColor = ~ colo,
+    fillOpacity = 0.7,
+    stroke = TRUE,
+    color = "#696773",
+    opacity = 0.7,
+    weight = 2,
+    label = ~ sp) %>%
+  addLayersControl(position = "topleft",
+                   baseGroups = c("Fond clair",
+                                  "Fond noir", 
+                                  "Fond satellite",
+                                  "Fond topographie"),
+                   overlayGroups = unique(l9$co),
+                   options = layersControlOptions(collapsed = FALSE)) %>% 
+  addLegend(data = l9 %>% 
+              st_drop_geometry() %>% 
+              distinct(co, colo),
+            position = "topright",
+            labels = ~ co,
+            colors = ~ colo, 
+            title = NULL, 
+            opacity = 0.7) -> map_2; map_2
+
+rm(map_2)
+
+
+
 
