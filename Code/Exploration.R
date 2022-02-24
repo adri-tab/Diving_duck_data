@@ -292,7 +292,6 @@ bind_rows(semi_join(l4 %>% pluck(1), l4 %>% pluck(2), by = "ring"),
 anti_join(l4 %>% pluck(1), l4 %>% pluck(2), by = "ring") %>% 
   anti_join(l4 %>% pluck(3), by = "ring") %>% nrow()
 
-
 # Coordinates check by mapping ------------------------------------------------------
 
 l4 %>% 
@@ -368,7 +367,10 @@ l4 %>%
                    co %>% str_starts(c("SWI|SUI|SWT")) ~ "SWITZERLAND",
                    co %in% c("UK", "OK", "SCOTLAND") ~ "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND",
                    co == "ITALIA" ~ "ITALY", 
-                   TRUE ~ co)) %>% 
+                   TRUE ~ co))) -> l5
+
+l5 %>%
+  map(~ .x %>% 
         select(id, co, dpt, com, spot, lon, lat)) %>% 
   reduce(bind_rows) -> spots
 
@@ -448,7 +450,6 @@ map_base %>%
             opacity = 0.7) -> map_2; map_2
 
 rm(map_2)
-
 
 # Corrections : check dans le pays --------------------------------------------------
 
@@ -826,7 +827,12 @@ anti_join(spot_base, modif, by = "id") %>%
   mutate(across(c(co, com, spot), 
                 ~ .x %>% 
                   iconv(from = "UTF-8", to = "ASCII//TRANSLIT") %>% # remove accent
-                  str_to_upper())) -> spot_base2
+                  str_to_upper())) -> spot_base1
+
+spots %>% 
+  anti_join(spot_base1 %>% select(id)) %>% 
+  mutate(across(c(lon, lat), ~ NA_real_)) %>%  
+  bind_rows(spot_base1) -> spot_base2
 
 # Corrections par nom de commune / spot -----------------------------------------------
 
@@ -1016,15 +1022,48 @@ list(match_spot1 %>% mutate(match = "spot"),
   reduce(bind_rows) -> spot_match
 
 anti_join(spot_base2, spot_match) %>% 
+  filter(if_any(c(lon, lat), is.na)) %>% 
+  select(-lon, -lat) %>% 
+  nest_by(co, com, spot) %>% 
+  rowid_to_column("id_rep") -> to_find
+
+rbind( 
+  c(52.34632019544103, 4.527200043337543),
+  c(47.35971150199786, -0.13032148874992358),
+  c(47.35229176310093, 2.5861804820696053),
+  c(45.786541046002526, 4.987740502521813),
+  c(45.92648376559903, 4.954877448370128),
+  c(53.46846872109407, 12.714431366935548),
+  c(51.01943241756598, 12.479192777961744),
+  c(43.541235726085176, -5.875858501571685),
+  c(43.408018456134926, -3.8250945105443503),
+  c(41.85415860485217, -5.593267966755118),
+  c(46.82387183434558, 6.778031064574606),
+  c(46.513984910402684, 6.504950776999205),
+  c(51.64524075518134, -1.9077289598904172),
+  c(52.42353791220175, -1.6833674228793085),
+  c(52.68942527973278, -2.2007056411264863),
+  c(51.24970845538929, -0.14996957217968374)) %>% 
+  as_tibble(rownames = NULL) %>% 
+  set_names(c("lat", "lon")) %>% 
+  mutate(id_rep = to_find$id_rep) %>% 
+  full_join(to_find) %>% 
+  unnest(data) %>% 
+  mutate(co = if_else(id_rep == 1, "NETHERLANDS", co)) %>% 
+  select(-id_rep) -> found
+
+spot_base2 %>% 
+  filter(!id %in% c(spot_match$id, found$id)) %>% 
   bind_rows(spot_match) %>% 
+  bind_rows(found %>% mutate(match = "search")) %>% 
   mutate(match = if_else(is.na(match), "-", match)) -> spot_base3
 
 # analyse 
 spot_base3 %>% 
-  filter(!is.na(lon_2)) %>% 
+  filter(if_all(c(lon, lat, lon_2, lat_2), ~ !is.na(.x))) %>% 
   st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
   mutate(geom = spot_base3 %>% 
-           filter(!is.na(lon_2)) %>% 
+           filter(if_all(c(lon, lat, lon_2, lat_2), ~ !is.na(.x))) %>% 
            st_as_sf(coords = c("lon_2", "lat_2"), crs = 4326) %>% 
            pull(geometry),
          dist = st_distance(geometry, 
@@ -1042,5 +1081,36 @@ check_dist %>%
 spot_base3 %>% 
   left_join(check_dist %>% select(id, dist) %>% st_drop_geometry()) %>% 
   mutate(lon = if_else(dist > 15 & !is.na(dist), lon_2, lon),
-         lat = if_else(dist > 15 & !is.na(dist), lat_2, lat)) %>% 
-  select(id, lon, lat) -> spot_base4
+         lat = if_else(dist > 15 & !is.na(dist), lat_2, lat), 
+         co = if_else(!is.na(com_2), co_2, co),
+         com = if_else(!is.na(com_2), com_2, com),
+         com = if_else(!is.na(spot_2), spot_2, spot)) %>% 
+  select(id, lon, lat, co, dpt, com, spot) -> spot_base4
+
+filtration
+
+# Cohérence de la timeline ----------------------------------------------------------
+
+l5 %>% 
+  map(
+    ~ .x %>%
+      select(id, obs, datetime, ring, wgh = POIDS) %>% 
+      mutate(wgh = as.numeric(wgh))) %>% 
+  reduce(bind_rows) -> l6
+
+l6 %>%  
+  arrange(ring, datetime) %>% 
+  nest_by(ring) %>% 
+  mutate(data = data %>% 
+           mutate(time = if_else(obs == "BAGUAGE", 1, 0) %>% cumsum()) %>% 
+           filter(time > 0) %>% 
+           mutate(time = if_else(obs == "REPRISE", 1, 0) %>% cumsum(), 
+                  time = if_else(obs == "REPRISE", 0, time)) %>% 
+           filter(time == 0) %>% 
+           list()) %>% 
+  unnest(data) %>% 
+  filter(time < 1)
+  mutate(nobs = nrow(data),
+         reprise = if_else(any(data$obs == "REPRISE"), TRUE, FALSE)) %>% 
+  
+
