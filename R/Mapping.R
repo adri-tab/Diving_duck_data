@@ -1,6 +1,5 @@
 # Package loading -------------------------------------------------------------------
 
-Sys.setlocale("LC_ALL", "English")
 require(tidyverse)
 require(readxl)
 require(lubridate)
