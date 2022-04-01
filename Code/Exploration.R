@@ -1,6 +1,5 @@
 # Package loading -------------------------------------------------------------------
 
-Sys.setlocale("LC_ALL", "English")
 require(tidyverse)
 require(readxl)
 require(lubridate)
@@ -15,10 +14,12 @@ options(viewer = NULL)
 
 c("t_capture", "t_controle", "t_controle_coo", "t_reprise", "t_commune", "t_spot") %>% 
   set_names() %>% 
-  map(~ read_excel("./Data/data_duck.xlsx",
+  imap(~ read_excel("./Data/data_duck.xlsx",
            sheet = .x, 
            na = c("", "NA"), 
-           guess_max = 40000)) -> l1
+           guess_max = 40000) %>% 
+        rowid_to_column("id") %>% 
+        mutate(id = str_c(id, .x, sep = "_"))) -> l1
 
 l2 <- list()
 
@@ -58,7 +59,7 @@ l1 %>%
            AGE %>% str_starts("2") ~ "2A",
            AGE == "PUL" ~ "pul",
            TRUE ~ "ind")) %>% 
-  select(obs = ACTION, datetime, ring = BAGUE,
+  select(id, obs = ACTION, datetime, ring = BAGUE,
          sp = ESPECE, sex, age, 
          lon, lat, co = PAYS, dpt = DEPARTEMENT, com = COMMUNE, spot = LIEUDIT, 
          raw_lon, raw_lat, 
@@ -91,7 +92,7 @@ l1 %>%
          lat = dir_lat * (LAT_DEG + LAT_MIN / 60 + LAT_SEC / 60^2), 
          raw_lon = str_c(dir_lon, LONG_DEG, LONG_MIN, LONG_SEC, sep = ":"),
          raw_lat = str_c(dir_lat, LAT_DEG, LAT_MIN, LAT_SEC, sep = ":")) %>%
-  select(obs, datetime, ring = BAGUE,
+  select(id,  obs, datetime, ring = BAGUE,
          sp = ESPECE, 
          lon, lat, co = PAYS, dpt = DEPARTEMENT, com = COMMUNE, spot = LIEUDIT, 
          raw_lon, raw_lat, 
@@ -132,7 +133,7 @@ l1 %>%
          lat = dir_lat * (LAT_DEG + LAT_MIN / 60 + LAT_SEC / 60^2), 
          raw_lon = str_c(dir_lon, LONG_DEG, LONG_MIN, LONG_SEC, sep = ":"),
          raw_lat = str_c(dir_lat, LAT_DEG, LAT_MIN, LAT_SEC, sep = ":")) %>%
-  select(obs, datetime, ring = BAGUE,
+  select(id,  obs, datetime, ring = BAGUE,
          sp = ESPECE, 
          lon, lat,
          raw_lon, raw_lat, 
@@ -158,7 +159,7 @@ l1 %>%
          lat = dir_lat * (LAT_DEG + LAT_MIN / 60 + LAT_SEC / 60^2), 
          raw_lon = str_c(dir_lon, LONG_DEG, LONG_MIN, LONG_SEC, sep = ":"),
          raw_lat = str_c(dir_lat, LAT_DEG, LAT_MIN, LAT_SEC, sep = ":")) %>% 
-  select(obs = ACTION, datetime, ring = `N° BAGUE`,
+  select(id,  obs = ACTION, datetime, ring = `N° BAGUE`,
          sp = ESPECE, 
          lon, lat, co = PAYS, dpt = DEPARTEMENT, com = COMMUNE, spot = LIEUDIT,
          raw_lon, raw_lat, 
@@ -176,28 +177,30 @@ l2 %>%
   pluck(1) %>% 
   filter(obs == "BAGUAGE") -> l3[[1]]
 
-# on vire duplicata de baguage : - 2 données
-l3 %>% 
-  pluck(1) %>% 
-  filter(!duplicated(.)) %>% 
-  arrange(datetime, sp, ring) -> l3[[1]]
-
-# on vire les autres duplicata de baguage
+# on vire les autres duplicata de baguage avec quelques diff
 l3 %>% 
   pluck(1) %>% 
   add_count(ring) %>% 
   filter(n > 1) %>% 
-  slice(c(1, 3, 5)) -> to_rm_1
+  arrange(ring, datetime) %>% 
+  filter(id %in% c("7965_t_capture", 
+                          "8515_t_capture",
+                          "6061_t_capture",
+                          "8227_t_capture",
+                          "8228_t_capture",
+                          "8055_t_capture")) -> to_rm_1
 
 anti_join(l3 %>% pluck(1), to_rm_1) -> l3[[1]]
   
 # fusion des controles et restriction sur les capturés des sites choisis
-l2 %>% 
-  pluck(1) %>% 
-  filter(obs == "CONTROLE") %>% 
-  bind_rows(l2 %>% pluck(2)) %>% 
+# and remove duplicates by keeping the first
+l2 %>% pluck(2) %>% 
+  bind_rows(
+    l2 %>% 
+      pluck(1) %>% 
+      filter(obs == "CONTROLE")) %>% 
   filter(ring %in% (l3 %>% pluck(1) %>% pull(ring))) %>% 
-  filter(!duplicated(.)) -> l3[[2]]
+  distinct(ring, datetime, .keep_all = TRUE) -> l3[[2]]
 
 # couple bague marque de référence
 l3 %>% 
@@ -349,8 +352,7 @@ cos %>%
 l4 %>% 
   map(~ .x %>% 
         rowid_to_column() %>% 
-        mutate(id = str_c(rowid, ".", obs), 
-               co = co %>% 
+        mutate(co = co %>% 
                  iconv(from = "UTF-8", to = "ASCII//TRANSLIT") %>% # remove accent
                  str_to_upper(), 
                co = case_when(
@@ -407,7 +409,7 @@ spot2 %>%
 spot3 %>% 
   select(id, co, com, spot, geom2, dist) %>% 
   mutate(across(dist, ~ .x %>% as.numeric() %>% "*"(10^-3) %>% round()),
-         across(c(id, co, com, spot), str_replace_na),
+         across(c(co, com, spot), str_replace_na),
          spot_full = str_c(id, co, com, spot, sep = " / ")) %>% 
   filter(dist > 0) %>% 
   arrange(co, com, spot, desc(dist)) -> spot4; spot4
@@ -451,7 +453,7 @@ rm(map_2)
 
 # Belgique
 spot_base %>% 
-  filter(id %in% c("12188.CONTROLE", "12189.CONTROLE")) %>% 
+  filter(id %in% c("16302_t_controle", "16275_t_controle")) %>% 
   mutate(lon = abs(lon)) -> modif
 
 # Denmark -> ok
@@ -460,29 +462,29 @@ spot_base %>%
 
 #IRELAND
 spot_base %>% 
-  filter(id %in% c("832.REPRISE")) %>% 
+  filter(id %in% c("1003_t_reprise")) %>% 
   mutate(co = "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND") %>% 
   bind_rows(modif) -> modif
 
 # Netherlands
 spot_base %>% 
-  filter(id %in% c("195.REPRISE")) %>% 
+  filter(id %in% c("1046_t_reprise")) %>% 
   mutate(lat = lat - 1) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("3021.CONTROLE")) %>% 
+  filter(id %in% c("19439_t_controle")) %>% 
   mutate(co = "BELGIUM") %>% 
   bind_rows(modif) -> modif
 
 # Portugal
 spot_base %>% 
-  filter(id %in% c("4256.CONTROLE")) %>% 
+  filter(id %in% c("14839_t_controle")) %>% 
   mutate(co = "SPAIN") %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("6920.CONTROLE")) %>% 
+  filter(id %in% c("17786_t_controle")) %>% 
   mutate(lon = lon - 5) %>% 
   bind_rows(modif) -> modif
 
@@ -490,27 +492,27 @@ spot_base %>%
 
 # Spain
 spot_base %>% 
-  filter(id %in% c("15764.CONTROLE")) %>% 
+  filter(id %in% c("16375_t_controle")) %>% 
   mutate(lon = -lon) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("13880.CONTROLE")) %>% 
+  filter(id %in% c("32458_t_controle")) %>% 
   mutate(lon = -lon) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("7786.CONTROLE")) %>% 
+  filter(id %in% c("17708_t_controle")) %>% 
   mutate(lat = 43.537) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("15708.CONTROLE", "15760.CONTROLE", "15780.CONTROLE", "15798.CONTROLE", 
-                   "18939.CONTROLE", 
-                   "10501.CONTROLE", "10522.CONTROLE", "10574.CONTROLE",
-                   "13300.CONTROLE",
-                   "9420.CONTROLE",
-                   "15801.CONTROLE")) %>% 
+  filter(id %in% c("32070_t_controle", "32047_t_controle", "32048_t_controle", "31136_t_controle", 
+                   "32104_t_controle", 
+                   "32497_t_controle", "32397_t_controle", "32463_t_controle",
+                   "16078_t_controle",
+                   "31932_t_controle",
+                   "31133_t_controle")) %>% 
   mutate(lon = -lon) %>% 
   bind_rows(modif) -> modif
 
@@ -518,59 +520,59 @@ spot_base %>%
 
 # Switzerland
 spot_base %>% 
-  filter(id %in% c("10687.CONTROLE")) %>% 
+  filter(id %in% c("16357_t_controle")) %>% 
   mutate(lon = -lon) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("20590.CONTROLE")) %>% 
+  filter(id %in% c("31823_t_controle")) %>% 
   mutate(lat = lat + .2) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("8155.CONTROLE", "10528.CONTROLE")) %>% 
+  filter(id %in% c("14928_t_controle", "16251_t_controle")) %>% 
   mutate(lat = lat - 1) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("13793.CONTROLE")) %>% 
+  filter(id %in% c("16274_t_controle")) %>% 
   mutate(lat = lat + 6) %>% 
   bind_rows(modif) -> modif
 
 # UK
 spot_base %>% 
-  filter(id %in% c("26975.CONTROLE")) %>% 
+  filter(id %in% c("31887_t_controle")) %>% 
   mutate(lon = -lon) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("508.REPRISE")) %>% 
+  filter(id %in% c("1050_t_reprise")) %>% 
   mutate(lat = lat - 8) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("18943.CONTROLE")) %>% 
+  filter(id %in% c("32810_t_controle")) %>% 
   mutate(lon = -lon) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("17242.CONTROLE")) %>% 
+  filter(id %in% c("16241_t_controle")) %>% 
   mutate(lon = lon - 2) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("24516.CONTROLE")) %>% 
+  filter(id %in% c("31158_t_controle")) %>% 
   mutate(lon = -lon) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("18845.CONTROLE")) %>% 
+  filter(id %in% c("32809_t_controle")) %>% 
   mutate(lon = -lon) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("15856.CONTROLE",
-                   "4744.CONTROLE")) %>% 
+  filter(id %in% c("31849_t_controle",
+                   "31922_t_controle")) %>% 
   mutate(lat = lat + 10) %>% 
   bind_rows(modif) -> modif
 
@@ -595,79 +597,78 @@ check %>%
   select(-id_country) %>% view()
 
 spot_base %>% 
-  filter(id %in% c("6827.CONTROLE", "9158.CONTROLE", "9202.CONTROLE", 
-                   "9230.CONTROLE",
-                   "10355.CONTROLE", "11080.CONTROLE",
-                   "26558.CONTROLE",
-                   "575.REPRISE")) %>% 
+  filter(id %in% c("16598_t_controle", 
+                   "33669_t_controle", "33805_t_controle", "33888_t_controle",
+                   "16069_t_controle", "16069_t_controle",
+                   "34584_t_controle",
+                   "1080_t_reprise")) %>% 
   mutate(co = "GERMANY") %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("8504.CONTROLE", "12540.CONTROLE", "12565.CONTROLE",
-                   "12581.CONTROLE",
-                   "12670.CONTROLE")) %>% 
+  filter(id %in% c("33521_t_controle", 
+                   "16886_t_controle", "16879_t_controle", "16904_t_controle", 
+                   "16885_t_controle")) %>% 
   mutate(co = "POLAND") %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("7570.CONTROLE", "7574.CONTROLE",
-                   "8171.CONTROLE",
-                   "8295.CONTROLE",
-                   "9349.CONTROLE", "11207.CONTROLE",
-                   "13827.CONTROLE",
-                   "15812.CONTROLE",
-                   "26275.CONTROLE",
-                   "26564.CONTROLE")) %>% 
+  filter(id %in% c("18846_t_controle", "18847_t_controle",
+                   "16511_t_controle", "16512_t_controle",
+                   "33674_t_controle", 
+                   "33493_t_controle",
+                   "34182_t_controle",
+                   "16902_t_controle",
+                   "34577_t_controle")) %>% 
   mutate(co = "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND") %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("8500.CONTROLE", "9237.CONTROLE", 
-                   "9238.CONTROLE", 
-                   "10513.CONTROLE",
-                   "24605.CONTROLE")) %>% 
+  filter(id %in% c("19797_t_controle", 
+                   "34260_t_controle", "16659_t_controle", 
+                   "33852_t_controle",
+                   "31401_t_controle")) %>% 
   mutate(co = "BELGIUM") %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("1020.CONTROLE", "6388.CONTROLE", 
-                   "6613.CONTROLE", "10710.CONTROLE", 
-                   "11389.CONTROLE", "11394.CONTROLE", "11399.CONTROLE",
-                   "13110.CONTROLE", "13111.CONTROLE")) %>% 
+  filter(id %in% c("19409_t_controle", "17463_t_controle", 
+                   "18516_t_controle", "33490_t_controle", 
+                   "16881_t_controle", "31262_t_controle", "34490_t_controle",
+                   "34469_t_controle")) %>% 
   mutate(co = "SWITZERLAND") %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("6435.CONTROLE", 
-                   "9575.CONTROLE",
-                   "12450.CONTROLE",
-                   "24595.CONTROLE", 
-                   "27886.CONTROLE")) %>% 
+  filter(id %in% c("32888_t_controle", 
+                   "33189_t_controle",
+                   "33011_t_controle",
+                   "34017_t_controle", 
+                   "33528_t_controle")) %>% 
   mutate(co = "SPAIN") %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("147.REPRISE", 
-                   "581.REPRISE",
-                   "582.REPRISE",
-                   "770.REPRISE", "772.REPRISE", 
-                   "816.REPRISE",  
-                   "818.REPRISE",
-                   "919.REPRISE")) %>% 
+  filter(id %in% c("476_t_reprise", 
+                   "823_t_reprise",
+                   "490_t_reprise",
+                   "818_t_reprise", "484_t_reprise", 
+                   "798_t_reprise",  
+                   "495_t_reprise",
+                   "498_t_reprise")) %>% 
   mutate(co = "RUSSIAN FEDERATION") %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("4820.CONTROLE", 
-                   "5862.CONTROLE",
-                   "11036.CONTROLE",
-                   "756.REPRISE")) %>% 
+  filter(id %in% c("16978_t_controle", 
+                   "34461_t_controle",
+                   "29709_t_controle",
+                   "1113_t_reprise")) %>% 
   mutate(co = "NETHERLANDS") %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("668.REPRISE")) %>% 
+  filter(id %in% c("598_t_reprise")) %>% 
   mutate(co = "ITALY") %>% 
   bind_rows(modif) -> modif
 
@@ -703,7 +704,7 @@ rm(map_3)
 
 # Balloy
 spot_base %>% 
-  filter(id %in% c("434.BAGUAGE")) %>% 
+  filter(id %in% c("3297_t_capture")) %>% 
   mutate(lat = lat + 20) %>% 
   bind_rows(modif) -> modif
 
@@ -713,32 +714,32 @@ spot_base %>%
 
 # Bistroff
 spot_base %>% 
-  filter(id %in% c("18769.CONTROLE")) %>% 
+  filter(id %in% c("31043_t_controle")) %>% 
   mutate(lat = lat + 2) %>% 
   bind_rows(modif) -> modif
 
 # Calais
 spot_base %>% 
-  filter(id %in% c("972.REPRISE")) %>% 
+  filter(id %in% c("744_t_reprise")) %>% 
   mutate(lon = -lon) %>% 
   bind_rows(modif) -> modif
 
 # Cappy
 spot_base %>% 
-  filter(id %in% c("853.REPRISE")) %>% 
+  filter(id %in% c("638_t_reprise")) %>% 
   mutate(lat = lat + 30) %>% 
   bind_rows(modif) -> modif
 
 # CHALONS-DU-MAINE
 spot_base %>% 
-  filter(id %in% c("1017.REPRISE")) %>% 
+  filter(id %in% c("1069_t_reprise")) %>% 
   rename(lon = lat, 
          lat = lon) %>%  
   bind_rows(modif) -> modif
 
 # Etaples
 spot_base %>% 
-  filter(id %in% c("12476.CONTROLE")) %>% 
+  filter(id %in% c("32988_t_controle")) %>% 
   mutate(lon = -lon) %>%  
   bind_rows(modif) -> modif
 
@@ -746,13 +747,13 @@ spot_base %>%
 
 # GONDREVILLE-L'ORCHER
 spot_base %>% 
-  filter(id %in% c("4800.CONTROLE", "4804.CONTROLE")) %>% 
+  filter(id %in% c("15113_t_controle", "15112_t_controle")) %>% 
   mutate(lat = lat - .4) %>%  
   bind_rows(modif) -> modif
 
 # Grand Lavier
 spot_base %>% 
-  filter(id %in% c("26960.CONTROLE")) %>% 
+  filter(id %in% c("33531_t_controle")) %>% 
   mutate(lon = -lon) %>%  
   bind_rows(modif) -> modif
 
@@ -760,7 +761,7 @@ spot_base %>%
 
 # ile d'olonne
 spot_base %>% 
-  filter(id %in% c("17389.CONTROLE", "17509.CONTROLE")) %>% 
+  filter(id %in% c("34418_t_controle", "34419_t_controle")) %>% 
   mutate(lat = lat + 1) %>%  
   bind_rows(modif) -> modif
 
@@ -776,7 +777,7 @@ spot_base %>%
 
 # meazangers
 spot_base %>% 
-  filter(id %in% c("5843.BAGUAGE")) %>% 
+  filter(id %in% c("9422_t_capture")) %>% 
   rename(lon = lat, 
          lat = lon) %>% 
   mutate(lat = -lat) %>% 
@@ -786,16 +787,16 @@ spot_base %>%
 
 # Noirmoutier ok
 
-# Outline
+# Outine
 spot_base %>% 
-  filter(id %in% c("10302.CONTROLE")) %>% 
+  filter(id %in% c("33195_t_controle")) %>% 
   rename(lon = lat, 
          lat = lon) %>% 
   bind_rows(modif) -> modif
 
 # Saint-andre de seigneux 
 spot_base %>% 
-  filter(id %in% c("6522.CONTROLE")) %>% 
+  filter(id %in% c("18652_t_controle")) %>% 
   mutate(lat = lat + 1) %>% 
   bind_rows(modif) -> modif
 
@@ -803,18 +804,18 @@ spot_base %>%
 
 # Saint georges sur loire
 spot_base %>% 
-  filter(id %in% c("6822.CONTROLE", "8803.CONTROLE")) %>% 
+  filter(id %in% c("18504_t_controle", "16436_t_controle")) %>% 
   mutate(lon = -0.703333) %>% 
   bind_rows(modif) -> modif
 
 # Saint jean de thurigneux
 spot_base %>% 
-  filter(id %in% c("13953.CONTROLE")) %>% 
+  filter(id %in% c("30362_t_controle")) %>% 
   mutate(lat = lat + 30) %>% 
   bind_rows(modif) -> modif
 
 spot_base %>% 
-  filter(id %in% c("9191.CONTROLE")) %>% 
+  filter(id %in% c("29651_t_controle")) %>% 
   mutate(lon = lon + 41) %>%
   rename(lon = lat, lat = lon) %>% 
   bind_rows(modif) -> modif
@@ -828,14 +829,14 @@ spot_base %>%
 
 # SAINT-ROMAIN-SUR-GIRONDE
 spot_base %>% 
-  filter(id == "608.REPRISE") %>% 
+  filter(id == "756_t_reprise") %>% 
   rename(lon = lat,
          lat = lon) %>% 
   bind_rows(modif) -> modif
 
 # SAINTES-MARIES-DE-LA-MER
 spot_base %>% 
-  filter(id == "643.REPRISE") %>% 
+  filter(id == "1079_t_reprise") %>% 
   mutate(lat = lat + 0.05) %>% 
   bind_rows(modif) -> modif
 
@@ -845,25 +846,25 @@ spot_base %>%
 
 # TREGUENNEC
 spot_base %>% 
-  filter(id == "10758.CONTROLE") %>% 
+  filter(id == "33879_t_controle") %>% 
   mutate(lon = -4.33502778) %>%
   bind_rows(modif) -> modif
 
 # VAL-DE-REUIL
 spot_base %>% 
-  filter(id == "5784.CONTROLE") %>% 
+  filter(id == "33453_t_controle") %>% 
   mutate(lat = lat + 40) %>%
 bind_rows(modif) -> modif
 
 # VILLARS-LES-DOMBES
 spot_base %>% 
-  filter(id == "7980.CONTROLE") %>% 
+  filter(id == "18373_t_controle") %>% 
   mutate(lat = lat - 4) %>%
   bind_rows(modif) -> modif
 
 # VILLENEUVE-LA-GUYARD
 spot_base %>% 
-  filter(id == "419.REPRISE") %>% 
+  filter(id == "848_t_reprise") %>% 
   mutate(co = "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND",
          dpt = NA_character_,
          com = "ASHBOURNE",
@@ -887,7 +888,7 @@ spots %>%
 
 l1 %>% 
   pluck(6) %>% 
-  select(co = PAYS, dpt = DEPARTEMENT, com = COMMUNE, spot = `LIEU-DIT`, 6:11) %>% 
+  select(co = PAYS, dpt = DEPARTEMENT, com = COMMUNE, spot = `LIEU-DIT`, 7:12) %>% 
   mutate(dir_lon = if_else(LONG_DEG %>% str_detect("-"), -1, 1),
          dir_lat = if_else(LAT_DEG %>% str_detect("-"), -1, 1),
          across(c(LONG_DEG, LONG_MIN, LONG_SEC, LAT_DEG, LAT_MIN, LAT_SEC), 
@@ -1161,7 +1162,8 @@ l6 %>%
   arrange(ring, datetime) %>% 
   view()
 
-c("30385.CONTROLE", "5932.CONTROLE", "75.CONTROLE", "1771.CONTROLE") -> to_drop
+c("16384_t_controle", "27484_t_controle", "17416_t_controle", "951_t_reprise", 
+  "31652_t_controle", "33953_t_controle", "15564_t_controle") -> to_drop
 
 l6 %>% 
   filter(!id %in% to_drop) %>% 
