@@ -4,9 +4,10 @@ require(tidyverse)
 require(readxl)
 require(lubridate)
 require(sf)
-require(geosphere) # function st_azimuth()
 require(leaflet)
 require(htmlwidgets)
+require(stars)
+
 
 options(viewer = NULL) 
 
@@ -68,8 +69,45 @@ tp1 %>%
            age %in% c("1A", "2A", "pull") & winter == year(datetime_c) ~ "je",
            TRUE ~ "ad")) %>% 
   ungroup() -> tmp; tmp
-  
-  tmp %>% 
-    ggplot(aes(x = angle, y = dist)) +
-    geom_point()
-  
+
+tmp %>% 
+  filter(dist > 10, dist < 1500, origin == "West") %>% 
+  ggplot(aes(x = angle, y = dist)) +
+  geom_point() +
+  geom_smooth(method = "gam") + 
+  coord_polar(start = pi/2, direction = -1)
+
+
+tmp %>% 
+  filter(dist > 50) %>% 
+  ggplot(aes(x = dist, color = sp, group = sp, fill = sp)) + 
+  geom_density() +
+  facet_wrap( ~ sp)
+
+tmp %>% 
+  filter(dist > 350, origin == "West") %>% 
+  ggplot(aes(x = angle, color = sp, group = sp, fill = sp)) + 
+  # geom_histogram(binwidth = 22.5, boundary = -180, alpha = .3) +
+  geom_density(alpha = .3) +
+  coord_polar(direction = - 1, start = pi/2) +
+  scale_x_continuous(limits = c(-180, 180), 
+                     breaks = seq(-90, 180, length.out = 4),
+                     labels = c("S", "E", "N", "W")) +
+  facet_wrap(~sp)
+
+
+
+# Coline Land Cover ----------------------------------------------------------------
+
+read_stars("./Data/clc2018/DATA/U2018_CLC2018_V2020_20u1.tif") -> clc
+
+st_read("./Data/clc2018_poly2/u2018_clc2018_v2020_20u1_geoPackage/DATA/U2018_CLC2018_V2020_20u1.gpkg",
+        query = 'SELECT * FROM "U2018_CLC2018_V2020_20u1" WHERE FID = 1') -> clcp1
+
+st_read("./Data/clc2018_poly/DATA/U2018_CLC2018_V2020_20u1.gdb", 
+        query = 'SELECT * FROM "U2018_CLC2018_V2020_20u1" WHERE FID = 1') -> clcp2
+
+st_read("./Data/clc2018_poly3/clc.shp") -> clc3
+
+plot(clc3)
+
