@@ -10,8 +10,36 @@ require(leaflet)
 require(htmlwidgets)
 require(stars)
 
-
 options(viewer = NULL) 
+
+# Leaflet function ------------------------------------------------------------------
+
+leaflet() %>%
+  setView(lng = 30, lat = 55, zoom = 4) %>%
+  addProviderTiles(providers$CartoDB.DarkMatter,
+                   group = "Fond noir") -> map_base
+
+pal <- colorBin("YlOrRd", 
+                domain = ds$n, 
+                bins = c(1, 2, 5, 10, 20, 50, 100))
+
+function(ds) {
+  map_base %>% 
+    addPolygons(
+      data = ds,
+      fillColor = ~ pal(n),
+      weight = 2,
+      opacity = 1,
+      color =  ~ pal(n),
+      fillOpacity = 0.7,
+      highlightOptions = highlightOptions(
+        weight = 10, 
+        bringToFront = TRUE),
+      label = ~ str_c(n, " hivernants"),
+      labelOptions = labelOptions(
+        style = list("font-weight" = "normal", padding = "3px 8px"),
+        textsize = "15px",
+        direction = "auto"))} -> plot_wint
 
 # Preparation du jeu de données -----------------------------------------------------
 
@@ -21,7 +49,8 @@ jeu %>%
   filter(obs == "BAGUAGE", 
          yday(datetime) %in% c(yday(ymd(20000415)):yday(ymd(20000731)))) %>% 
   mutate(origin = 
-           case_when(dpt %in% c("44", "53") ~ "West",
+           case_when(dpt %in% c("44") ~ "Grand-Lieu",
+                     dpt %in% c("53") ~ "Mayenne",
                      dpt %in% c("41", "77", "89") ~ "Center",
                      dpt %in% c("42", "01", "51", "55") ~ "East") %>% 
            as_factor(),
@@ -141,8 +170,8 @@ part %>%
   st_as_sf() %>%
   rename(geometry = x) %>% 
   mutate(st_centroid(part) %>% st_as_sf() %>% st_transform(4326) %>% rename(centroid = x),
-         area = st_area(.),
-         perimeter = st_perimeter(.)) %>% 
+         area = st_area(.) %>% drop_units(),
+         perimeter = st_perimeter(.) %>% drop_units()) %>% 
   st_transform(4326) %>% 
   rowid_to_column() -> water
 
@@ -150,42 +179,70 @@ water %>%
   st_filter(cont4, .predicate = st_contains) -> occupied
 
 water %>% 
-  filter(drop_units(area) < 25e5) %>% 
+  filter((1e-6 * area) < 10) %>% 
   left_join(occupied %>% distinct(rowid) %>% mutate(occupied = TRUE)) %>% 
   mutate(across(occupied, replace_na, FALSE)) %>% 
-  ggplot(aes(x = area, fill = occupied, group = occupied)) + 
+  ggplot(aes(x = area * 1e-6, fill = occupied, group = occupied)) + 
   geom_histogram() + 
-  facet_wrap(~ occupied, scales = "free_y")
+  facet_grid(rows = vars(occupied), scales = "free_y")
 
 water %>% 
+  filter(perimeter < 1e5) %>% 
   left_join(occupied %>% distinct(rowid) %>% mutate(occupied = TRUE)) %>% 
   mutate(across(occupied, replace_na, FALSE)) %>% 
-  filter(occupied == TRUE) %>% 
-  pull(area) %>% 
-  quantile(probs = seq(0, 1, .1)) %>% 
-  bind_rows(
-    water %>% 
-      pull(area) %>% 
-      quantile(probs = seq(0, 1, .1)))
+  ggplot(aes(x = perimeter, fill = occupied, group = occupied)) + 
+  geom_histogram() + 
+  facet_grid(rows = vars(occupied), scales = "free_y")
 
 # weighting water bodies ------------------------------------------------------------
 
 water %>% 
   left_join(
     occupied %>% 
+      select(rowid) %>% 
       as_tibble() %>% 
       mutate(occupied = TRUE)) %>% 
-  mutate(across(occupied, replace_na, FALSE)) %>% 
-  # filter(occupied == TRUE) %>% 
-  mutate(across(area, drop_units)) %>% 
-  glm(area ~ 1, data = ., family = Gamma()) %>% residuals() %>% qqnorm()
+  filter(occupied == TRUE) %>% 
+  glm(log(area) ~ 1, data = ., family = gaussian()) %>% 
+  residuals() %>% 
+  qqnorm()
+# impossible à modéliser simplement, on passe par les quantiles
+
 
 water %>% 
-  left_join(occupied %>% distinct(rowid) %>% mutate(occupied = TRUE)) %>% 
-  mutate(across(occupied, replace_na, FALSE)) %>% 
-  filter(occupied == TRUE) %>% 
-  pull(area) %>% 
-  quantile(probs = seq(0, 1, .05)) %>% 
+  slice(st_nearest_feature(cont4, water)) %>% 
+  count(rowid) -> ds 
+  
+
+
+water %>% 
   as_tibble() %>% 
-  mutate(qt = seq(0, 1, .05), 
-         diff = c(0, diff(value)))
+  slice(st_nearest_feature(cont4, water)) %>% 
+  pull(area) %>% 
+  quantile(seq(0, 1, length.out = 10)) %>% 
+  as_tibble_col(column_name = "down") %>% 
+  add_row(down = 0, .before = 1) %>% 
+  mutate(
+    up = c(down[-1] - 1e-6, max(water$area) + 1),
+    down = down,
+    wgt = c(0, rep(1, nrow(.) - 2), 0)) %>% 
+  rowid_to_column("id") -> occup
+
+water %>% 
+  as_tibble() %>% 
+  select(rowid, area) %>% 
+  rowwise() %>% 
+  mutate(id = which(
+    (cbind(
+      as.numeric(occup$down <= area), 
+      as.numeric(occup$up >= area)) %>% 
+       rowSums()) == 2)) %>% 
+  ungroup() -> cat_wb
+
+occup %>% 
+  left_join(cat_wb %>% count(id)) %>% 
+  mutate(wgt = wgt / n,
+         wgt  = wgt / sum(wgt))
+
+  
+  
