@@ -4,6 +4,7 @@ require(tidyverse)
 require(readxl)
 require(lubridate)
 require(sf)
+require(igraph)
 require(lwgeom)
 require(units)
 require(leaflet)
@@ -19,11 +20,12 @@ leaflet() %>%
   addProviderTiles(providers$CartoDB.DarkMatter,
                    group = "Fond noir") -> map_base
 
-pal <- colorBin("YlOrRd", 
-                domain = ds$n, 
-                bins = c(1, 2, 5, 10, 20, 50, 100))
-
-function(ds) {
+plot_wint <- function(ds) {
+  
+  pal <- colorBin("YlOrRd",
+           domain = ds$n, 
+           bins = c(1, 2, 5, 10, 20, 50, 100))
+  
   map_base %>% 
     addPolygons(
       data = ds,
@@ -35,11 +37,28 @@ function(ds) {
       highlightOptions = highlightOptions(
         weight = 10, 
         bringToFront = TRUE),
-      label = ~ str_c(n, " hivernants"),
-      labelOptions = labelOptions(
-        style = list("font-weight" = "normal", padding = "3px 8px"),
-        textsize = "15px",
-        direction = "auto"))} -> plot_wint
+      label = ~ str_c(n, " hivernants"))
+}
+
+plot_nich <- function(ds) {
+  
+  pal <- colorBin("YlOrRd",
+                  domain = ds$n, 
+                  bins = c(1, 10, 20, 50, 100, 200, 500, 1000, 2000))
+  
+  map_base %>% 
+    addPolygons(
+      data = ds,
+      fillColor = ~ pal(n),
+      weight = 2,
+      opacity = 1,
+      color =  ~ pal(n),
+      fillOpacity = 0.7,
+      highlightOptions = highlightOptions(
+        weight = 10, 
+        bringToFront = TRUE),
+      label = ~ str_c(n, " nicheurs"))
+}
 
 # Preparation du jeu de données -----------------------------------------------------
 
@@ -48,13 +67,15 @@ read_rds("./Output/dataset_Aythya.rds") -> jeu
 jeu %>% 
   filter(obs == "BAGUAGE", 
          yday(datetime) %in% c(yday(ymd(20000415)):yday(ymd(20000731)))) %>% 
-  mutate(origin = 
-           case_when(dpt %in% c("44") ~ "Grand-Lieu",
-                     dpt %in% c("53") ~ "Mayenne",
-                     dpt %in% c("41", "77", "89") ~ "Center",
-                     dpt %in% c("42", "01", "51", "55") ~ "East") %>% 
+  mutate(nes_reg = 
+           case_when(dpt %in% c("44", "53") ~ "Ouest",
+                     dpt %in% c("41", "77", "89") ~ "Centre",
+                     dpt %in% c("42", "01", "51", "55") ~ "Est") %>% 
            as_factor(),
-         across(c(sex, age), ~ .x %>% replace_na("ind"))) -> ring_sel
+         across(c(sex, age), ~ .x %>% replace_na("ind"))) %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE) %>% 
+  rename(nes_dpt = dpt, nes_loc = geometry, n_lon = lon, n_lat = lat) %>% 
+  as_tibble() -> ring_sel
 
 # obs
 jeu %>% 
@@ -67,33 +88,38 @@ jeu %>%
         yday(datetime) %in% yday(ymd(20000701)):yday(ymd(20000831)) ~ "mue",
         yday(datetime) %in% yday(ymd(20000901)):yday(ymd(20001031)) ~ "post-mue",
         yday(datetime) %in% yday(ymd(20001101)):yday(ymd(20001115)) ~ "départ_hivernage",
-        yday(datetime) %in% c(yday(ymd(20001116)):yday(ymd(20001231)), yday(ymd(20000101)):yday(ymd(20000215))) ~ "hivernage",
+        yday(datetime) %in% c(yday(ymd(20001116)):yday(ymd(20001231)), 
+                              yday(ymd(20000101)):yday(ymd(20000215))) ~ "hivernage",
         yday(datetime) %in% yday(ymd(20000216)):yday(ymd(20000414)) ~ "départ_repro") %>% 
-      factor(levels = c("repro", "mue", "post-mue", "départ_hivernage", "hivernage", "départ_repro"))) %>% 
+      factor(levels = c("repro", "mue", "post-mue", "départ_hivernage", "hivernage", 
+                        "départ_repro"))) %>% 
   inner_join(ring_sel %>% 
                filter(nobs > 1) %>% 
-               distinct(ring, sp, sex, age, dpt, origin)) -> cont
+               distinct(ring, sp, sex, age, nes_dpt, nes_reg)) -> cont
 
 # Winter spot selection -------------------------------------------------------------
 
 cont %>% 
   mutate(winter = if_else(month(datetime) < 7, -1, 0) + year(datetime),
-         wintering = (ymd(str_c(winter, "1224")) - date(datetime)) %>% as.numeric() %>% abs()) %>% 
-  filter(wintering < 40) -> cont2
+         wintering = (ymd(str_c(winter, "1224")) - date(datetime)) %>% 
+           as.numeric() %>% abs()) %>% 
+  filter(wintering < 40) %>% 
+  select(-period) -> cont2
 
 cont2 %>% 
   arrange(ring, winter, wintering) %>% 
   distinct(ring, winter, .keep_all = TRUE) %>% 
   select(-wintering) %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE) %>% 
+  rename(win_loc = geometry) %>% 
   left_join(ring_sel %>% 
-              select(ring, datetime_c = datetime, lon_c = lon, lat_c = lat, origin)) %>% 
-  mutate(angle = atan2(lat - lat_c, lon - lon_c) * 180/pi) %>% 
-  st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+              select(ring, n_datetime = datetime, n_lon, n_lat, nes_loc, nes_reg)) %>% 
+  mutate(angle_deg = atan2(lat - n_lat, lon - n_lon) * 180/pi) %>% 
   rowwise() %>% 
-  mutate(geom = st_sfc(st_point(c(lon_c, lat_c)), crs = 4326), 
-         dist = st_distance(geom, geometry, by_element = TRUE) %>% as.numeric() %>% "*"(1e-3),
+  mutate(dist_km = st_distance(nes_loc, win_loc, by_element = TRUE) %>% 
+           drop_units() %>% "*"(1e-3),
          age = case_when(
-           age %in% c("1A", "2A", "pull") & winter == year(datetime_c) ~ "je",
+           age %in% c("1A", "2A", "pull") & winter == year(n_datetime) ~ "je",
            TRUE ~ "ad")) %>% 
   ungroup() -> cont3; cont3
 
@@ -124,20 +150,27 @@ cont3 %>%
     jeu %>% 
       select(id, co)) %>% 
   left_join(obs_pressure %>% mutate(wgt = 1 / nobs_win)) %>%
-  select(-nobs_win) -> cont4
+  mutate(nb = nrow(.), 
+         wgt = nb * wgt / sum(wgt)) %>% 
+  select(id, obs, ring, sp, sex, age, 
+         win = winter,
+         angle_deg, dist_km, 
+         win_date = datetime, win_loc, 
+         nes_date = n_datetime, nes_loc,
+         win_co = co, win_wgt = wgt, nes_dpt, nes_reg) -> cont4
 
-# direction & angle -----------------------------------------------------------------
+# Explo direction et angle  ----------------------------------------------------------
 
 cont4 %>% 
-  filter(dist > 10) %>% 
-  ggplot(aes(x = dist, color = sp, group = sp, fill = sp)) + 
-  geom_density(aes(weight = wgt), alpha = .3) +
-  facet_wrap( ~ sp)
+  filter(dist_km > 10, sex != "ind") %>% 
+  ggplot(aes(x = dist_km, color = sp, group = sp, fill = sp)) + 
+  geom_density(aes(weight = win_wgt), alpha = .3) +
+  facet_wrap(sex ~ sp)
 # en moyenne les oiseaux se distribuent selon une loi gamma
 
 cont4 %>% 
-  filter(dist > 10) %>% 
-  ggplot(aes(x = angle, y = dist)) +
+  filter(dist_km > 10) %>% 
+  ggplot(aes(x = angle_deg, y = dist_km)) +
   geom_point() +
   geom_smooth(method = "gam") + 
   coord_polar(start = pi/2, direction = -1) +
@@ -145,75 +178,184 @@ cont4 %>%
   scale_x_continuous(limits = c(-180, 180), 
                      breaks = seq(-90, 180, length.out = 4),
                      labels = c("S", "E", "N", "W"))
-# -> les oiseaux vont plus loin direction sud ouest
+# -> les oiseaux vont plus loin direction sud ouest depuis leur site de nidif
 
 cont4 %>% 
-  filter(dist > 10, origin == "West") %>% 
-  ggplot(aes(x = angle, color = sp, group = sp, fill = sp)) + 
+  filter(dist_km > 10) %>% 
+  ggplot(aes(x = angle_deg, color = sp, group = sp, fill = sp)) + 
   # geom_histogram(binwidth = 22.5, boundary = -180, alpha = .3) +
-  geom_density(alpha = .3, aes(weight = wgt)) +
+  geom_density(alpha = .3, aes(weight = win_wgt)) +
   coord_polar(direction = - 1, start = pi/2) +
   scale_x_continuous(limits = c(-180, 180), 
                      breaks = seq(-90, 180, length.out = 4),
                      labels = c("S", "E", "N", "W")) +
-  facet_wrap( ~ sp)
+  facet_grid(nes_reg ~ sp)
+# ils ne se dirigent pas préférentiellement au sud
 
-# Coline Land Cover ----------------------------------------------------------------
 
-st_read("./Data/Coline_Land_Cover_2018/clc.shp", as_tibble = TRUE) -> clc
+# Corine Land Cover manip ---------------------------------------------------------------------
 
-clc %>% 
-  st_union() %>% 
-  st_cast("POLYGON") -> part
+# 411 inland marshes
+# 412 peat bogs
+# 421 salt marshes
+# 422 salines
+# 423 intertidal flats
+# 511 water courses
+# 512 water bodies
+# 521 coastal lagoons
+# 522 estuaries
+# 523 sea and ocean
 
-part %>% 
-  st_as_sf() %>%
-  rename(geometry = x) %>% 
-  mutate(st_centroid(part) %>% st_as_sf() %>% st_transform(4326) %>% rename(centroid = x),
-         area = st_area(.) %>% drop_units(),
-         perimeter = st_perimeter(.) %>% drop_units()) %>% 
-  st_transform(4326) %>% 
-  rowid_to_column() -> water
+# st_read("../Database/corine_land_cover_water_only/clc2018_water.shp",
+#         as_tibble = TRUE) %>%
+#   st_set_crs(value = 3035) -> clc
+# 
+# # clusters des wb adjacents
+# clc %>%
+#   select(g_wb = geometry,
+#          sys_type = Code_18) %>%
+#   st_cast("POLYGON") %>%
+#   mutate(sys_type =
+#            case_when(
+#              sys_type %in% c(411, 512) ~ "soft_wb",
+#              sys_type %in% c(412) ~ "peat",
+#              sys_type %in% c(423, 522) ~ "coast",
+#              sys_type %in% c(421, 422, 521) ~ "salt_wb",
+#              sys_type %in% c(511) ~ "river",
+#              sys_type %in% c(523) ~ "sea")) %>%
+#   group_by(sys_type) %>%
+#   mutate(cluster = g_wb %>%
+#            st_intersects() %>%
+#            graph_from_adj_list() %>%
+#            components() %>%
+#            pluck(membership) %>%
+#            as.integer()) %>%
+#   add_count(sys_type, cluster) -> clc2
+# 
+# # regroupement des wb adjacents
+# clc2 %>%
+#   filter(n > 1) %>%
+#   group_by(sys_type, cluster) %>%
+#   summarize(across(g_wb, st_union)) %>%
+#   bind_rows(clc2 %>% filter(n == 1)) %>%
+#   ungroup() %>%
+#   select(-cluster, -n) %>%
+#   st_cast("POLYGON") %>%
+#   # -> st_union fournit un multipolygon avec st_intersects si 1 seul point en commun
+#   # donc on prend st_cast pour avoir des polygons uniques
+#   rowid_to_column("wb_id") -> clc3
+# 
+# # -> !!! methode bourrin directe : st_union() de tous les wb et st_cast("POLYGON"), mais très lourd
+# 
+# # clusters des wb à moins de 1km pour décrire les systèmes
+#   # methode plus rapide que d'utiliser st_is_within_distance()
+# clc3 %>%
+#   mutate(
+#     across(g_wb,
+#            ~ st_simplify(.x, preserveTopology = TRUE, dTolerance = 100))) -> sys1 # on lisse à 30 mètres
+# # on buffer à la bonne distance
+# sys1 %>%
+#   mutate(
+#     across(g_wb,
+#            ~ st_buffer(.x, 10e2))) -> sys2 # semi-distance max pour associer
+# # on cluster
+# sys2 %>%
+#   group_by(sys_type) %>%
+#   mutate(cluster = g_wb %>%
+#            st_intersects() %>%
+#            graph_from_adj_list() %>%
+#            components() %>%
+#            pluck(membership) %>%
+#            as.integer()) %>%
+#   ungroup() %>%
+#   add_count(sys_type, cluster) -> sys3
+# #
+# sys3 %>%
+#   st_drop_geometry() %>%
+#   right_join(clc3) -> clc4
+# 
+# # creation of water system
+# clc4 %>%
+#   filter(n > 1) %>%
+#   group_by(sys_type, cluster) %>%
+#   summarize(across(g_wb, st_combine)) %>%
+#   ungroup() %>%
+#   bind_rows(clc4 %>% filter(n == 1) %>% select(-wb_id)) %>%
+#   select(-n) %>%
+#   rename(g_sys = g_wb) %>%
+#   rowid_to_column("sys_id") -> sys4
+# 
+# sys4 %>%
+#   mutate(sys_area_ha = g_sys %>% st_area() %>% drop_units() %>% "*"(1e-4)) %>%
+#   mutate(across(g_sys, ~ .x %>% st_transform(4326))) %>%
+#   select(sys_id, sys_type, sys_area_ha, g_sys) %>%
+#   arrange(sys_type, sys_id) -> sys5
+# 
+# clc4 %>%
+#   left_join(sys4 %>% select(-g_sys)) %>%
+#   mutate(wb_area_ha = g_wb %>% st_area() %>% drop_units() %>% "*"(1e-4)) %>%
+#   mutate(across(g_wb, ~ .x %>% st_transform(4326))) %>%
+#   select(wb_id, sys_id, sys_type, sys_n = n, wb_area_ha, g_wb) %>%
+#   arrange(sys_type, sys_id, wb_id) -> clc5
+# 
+# write_rds(sys5, "../Database/clc_modified/system.rds")
+# write_rds(clc5, "../Database/clc_modified/waterbody.rds")
 
-water %>% 
-  st_filter(cont4, .predicate = st_contains) -> occupied
+# Attribution à des masses d'eau ----------------------------------------------------
 
-water %>% 
-  filter((1e-6 * area) < 10) %>% 
-  left_join(occupied %>% distinct(rowid) %>% mutate(occupied = TRUE)) %>% 
-  mutate(across(occupied, replace_na, FALSE)) %>% 
-  ggplot(aes(x = area * 1e-6, fill = occupied, group = occupied)) + 
-  geom_histogram() + 
-  facet_grid(rows = vars(occupied), scales = "free_y")
+read_rds("../Database/clc_modified/waterbody.rds") %>% 
+  filter(sys_type %in% c("soft_wb", "salt_wb")) %>% 
+  st_as_sf() -> wat_b
 
-water %>% 
-  filter(perimeter < 1e5) %>% 
-  left_join(occupied %>% distinct(rowid) %>% mutate(occupied = TRUE)) %>% 
-  mutate(across(occupied, replace_na, FALSE)) %>% 
-  ggplot(aes(x = perimeter, fill = occupied, group = occupied)) + 
-  geom_histogram() + 
-  facet_grid(rows = vars(occupied), scales = "free_y")
+read_rds("../Database/clc_modified/system.rds") %>% 
+  filter(sys_type %in% c("soft_wb", "salt_wb")) %>% 
+  st_as_sf() -> sys_b
 
-# weighting water bodies ------------------------------------------------------------
+wat_b %>% 
+  slice(st_nearest_feature(ring_sel %>% st_as_sf(coords = c("n_lon", "n_lat"), crs = 4326), 
+                           wat_b)) %>% 
+  bind_cols(ring_sel %>% st_as_sf(coords = c("n_lon", "n_lat"), crs = 4326), 
+            .) %>% 
+  mutate(dis = st_distance(nes_loc, g_wb, by_element = TRUE) %>% 
+           drop_units() %>% "*"(1e-3)) %>% 
+  as_tibble() %>% 
+  left_join(sys_b %>% as_tibble()) -> nes_spot
 
-water %>% 
+wat_b %>% 
+  slice(st_nearest_feature(cont4, 
+                           wat_b)) %>% 
+  bind_cols(cont4, 
+            .) %>% 
+  mutate(dis = st_distance(win_loc, g_wb, by_element = TRUE) %>% 
+           drop_units() %>% "*"(1e-3)) %>% 
+  as_tibble() %>% 
+  left_join(sys_b %>% as_tibble()) -> win_spot
+
+plot_nich(nes_spot %>% st_set_geometry("g_sys") %>% count(sys_id)) 
+plot_wint(win_spot %>% st_set_geometry("g_sys") %>% count(sys_id))
+
+rm()
+cont5 %>% 
+  filter(dis > 0.5) %>% 
+  select(win_loc, wb_id, sys_id, sys_n, sys_type, dis) %>% 
+  arrange(desc(dis)) -> big
+
+# ok revoir les masses d'eau CLC pour que les oiseaux tombent aux bons endroits. 
+# trop d'imprécisions pour l'instant. 
+
+wat %>% 
   left_join(
-    occupied %>% 
-      select(rowid) %>% 
-      as_tibble() %>% 
+    cont6 %>% 
+      st_drop_geometry() %>% 
+      distinct(rowid) %>% 
       mutate(occupied = TRUE)) %>% 
   filter(occupied == TRUE) %>% 
-  glm(log(area) ~ 1, data = ., family = gaussian()) %>% 
+  glm(log(wb_area_ha) ~ 1, data = ., family = gaussian()) %>% 
   residuals() %>% 
   qqnorm()
 # impossible à modéliser simplement, on passe par les quantiles
 
-
-water %>% 
-  slice(st_nearest_feature(cont4, water)) %>% 
-  count(rowid) -> ds 
-  
-
+plot_wint(cont6 %>% count(rowid))
 
 water %>% 
   as_tibble() %>% 
@@ -242,7 +384,7 @@ water %>%
 occup %>% 
   left_join(cat_wb %>% count(id)) %>% 
   mutate(wgt = wgt / n,
-         wgt  = wgt / sum(wgt))
+         wgt = wgt / sum(wgt))
 
   
   
