@@ -10,6 +10,7 @@ require(units)
 require(leaflet)
 require(htmlwidgets)
 require(stars)
+require(unikn)
 
 options(viewer = NULL) 
 
@@ -18,47 +19,57 @@ options(viewer = NULL)
 leaflet() %>%
   setView(lng = 30, lat = 55, zoom = 4) %>%
   addProviderTiles(providers$CartoDB.DarkMatter,
-                   group = "Fond noir") -> map_base
+                   group = "Fond noir") %>% 
+  addProviderTiles(providers$CartoDB.Positron,
+                   group = "Fond clair") -> map_base
 
-plot_wint <- function(ds) {
-  
-  pal <- colorBin("YlOrRd",
-           domain = ds$n, 
-           bins = c(1, 2, 5, 10, 20, 50, 100))
-  
+plot_leaf <- function(
+    ds, 
+    legend = " hivernants") {
+
   map_base %>% 
+    
     addPolygons(
       data = ds,
-      fillColor = ~ pal(n),
-      weight = 2,
-      opacity = 1,
-      color =  ~ pal(n),
+      group = "presence",
+      fillColor = ~ col,
       fillOpacity = 0.7,
+      color =  ~ col,
+      opacity = 1,
+      weight = 1,
       highlightOptions = highlightOptions(
-        weight = 10, 
+        weight = 5, 
         bringToFront = TRUE),
-      label = ~ str_c(n, " hivernants"))
+      label = ~ str_c(n, legend)) %>%
+    
+    addPolygons(
+      data = sys_b %>% 
+        filter(!sys_id %in% (
+          ds %>% as_tibble() %>% pull(sys_id))) %>% 
+        st_combine(),
+      group = "absence",
+      fillColor = "#0c4da2",
+      fillOpacity = 0.7,
+      color = "#0c4da2",
+      opacity = 1,
+      weight = 1) %>% 
+    
+    addLayersControl(
+      position = "topleft",
+      baseGroups = c("Fond noir", "Fond clair"),
+      overlayGroups = c("presence", "absence"),
+      options = layersControlOptions(collapsed = FALSE)) %>%
+    
+    addLegend(
+      data = ds %>% as_tibble() %>% arrange(lv_id) %>% distinct(lv, col) %>% 
+        add_row(lv = 0, col = "#0c4da2", .before = 1),
+      position = "topright",
+      labels = ~ lv,
+      colors = ~ col, 
+      title = NULL, 
+      opacity = 0.7)
 }
 
-plot_nich <- function(ds) {
-  
-  pal <- colorBin("YlOrRd",
-                  domain = ds$n, 
-                  bins = c(1, 10, 20, 50, 100, 200, 500, 1000, 2000))
-  
-  map_base %>% 
-    addPolygons(
-      data = ds,
-      fillColor = ~ pal(n),
-      weight = 2,
-      opacity = 1,
-      color =  ~ pal(n),
-      fillOpacity = 0.7,
-      highlightOptions = highlightOptions(
-        weight = 10, 
-        bringToFront = TRUE),
-      label = ~ str_c(n, " nicheurs"))
-}
 
 # Preparation du jeu de données -----------------------------------------------------
 
@@ -116,7 +127,7 @@ cont2 %>%
               select(ring, n_datetime = datetime, n_lon, n_lat, nes_loc, nes_reg)) %>% 
   mutate(angle_deg = atan2(lat - n_lat, lon - n_lon) * 180/pi) %>% 
   rowwise() %>% 
-  mutate(dist_km = st_distance(nes_loc, win_loc, by_element = TRUE) %>% 
+  mutate(dist_pt_km = st_distance(nes_loc, win_loc, by_element = TRUE) %>% 
            drop_units() %>% "*"(1e-3),
          age = case_when(
            age %in% c("1A", "2A", "pull") & winter == year(n_datetime) ~ "je",
@@ -154,7 +165,7 @@ cont3 %>%
          wgt = nb * wgt / sum(wgt)) %>% 
   select(id, obs, ring, sp, sex, age, 
          win = winter,
-         angle_deg, dist_km, 
+         angle_deg, dist_pt_km, 
          win_date = datetime, win_loc, 
          nes_date = n_datetime, nes_loc,
          win_co = co, win_wgt = wgt, nes_dpt, nes_reg) -> cont4
@@ -162,15 +173,15 @@ cont3 %>%
 # Explo direction et angle  ----------------------------------------------------------
 
 cont4 %>% 
-  filter(dist_km > 10, sex != "ind") %>% 
-  ggplot(aes(x = dist_km, color = sp, group = sp, fill = sp)) + 
+  filter(dist_pt_km > 10, sex != "ind") %>% 
+  ggplot(aes(x = dist_pt_km, color = sp, group = sp, fill = sp)) + 
   geom_density(aes(weight = win_wgt), alpha = .3) +
   facet_wrap(sex ~ sp)
 # en moyenne les oiseaux se distribuent selon une loi gamma
 
 cont4 %>% 
-  filter(dist_km > 10) %>% 
-  ggplot(aes(x = angle_deg, y = dist_km)) +
+  filter(dist_pt_km > 10) %>% 
+  ggplot(aes(x = angle_deg, y = dist_pt_km)) +
   geom_point() +
   geom_smooth(method = "gam") + 
   coord_polar(start = pi/2, direction = -1) +
@@ -181,7 +192,7 @@ cont4 %>%
 # -> les oiseaux vont plus loin direction sud ouest depuis leur site de nidif
 
 cont4 %>% 
-  filter(dist_km > 10) %>% 
+  filter(dist_pt_km > 10) %>% 
   ggplot(aes(x = angle_deg, color = sp, group = sp, fill = sp)) + 
   # geom_histogram(binwidth = 22.5, boundary = -180, alpha = .3) +
   geom_density(alpha = .3, aes(weight = win_wgt)) +
@@ -303,20 +314,20 @@ cont4 %>%
 
 # Attribution à des masses d'eau ----------------------------------------------------
 
-read_rds("../Database/clc_modified/waterbody.rds") %>% 
+read_rds("./Data_water/waterbody.rds") %>% 
   filter(sys_type %in% c("soft_wb", "salt_wb")) %>% 
   st_as_sf() -> wat_b
 
-read_rds("../Database/clc_modified/system.rds") %>% 
+read_rds("./Data_water/system.rds") %>% 
   filter(sys_type %in% c("soft_wb", "salt_wb")) %>% 
   st_as_sf() -> sys_b
 
 wat_b %>% 
-  slice(st_nearest_feature(ring_sel %>% st_as_sf(coords = c("n_lon", "n_lat"), crs = 4326), 
+  slice(st_nearest_feature(ring_sel %>% st_set_geometry("nes_loc"), 
                            wat_b)) %>% 
-  bind_cols(ring_sel %>% st_as_sf(coords = c("n_lon", "n_lat"), crs = 4326), 
+  bind_cols(ring_sel %>% st_set_geometry("nes_loc"), 
             .) %>% 
-  mutate(dis = st_distance(nes_loc, g_wb, by_element = TRUE) %>% 
+  mutate(dist_alloc_km = st_distance(nes_loc, g_wb, by_element = TRUE) %>% 
            drop_units() %>% "*"(1e-3)) %>% 
   as_tibble() %>% 
   left_join(sys_b %>% as_tibble()) -> nes_spot
@@ -326,24 +337,107 @@ wat_b %>%
                            wat_b)) %>% 
   bind_cols(cont4, 
             .) %>% 
-  mutate(dis = st_distance(win_loc, g_wb, by_element = TRUE) %>% 
-           drop_units() %>% "*"(1e-3)) %>% 
   as_tibble() %>% 
+  left_join(nes_spot %>% select(ring, g_wb_nes = g_wb)) %>% 
+  mutate(dist_alloc_km = st_distance(win_loc, g_wb, by_element = TRUE) %>% 
+           drop_units() %>% "*"(1e-3),
+         dist_wb_km = st_distance(g_wb, g_wb_nes, by_element = TRUE) %>% 
+           drop_units() %>% "*"(1e-3)) %>%
   left_join(sys_b %>% as_tibble()) -> win_spot
 
-plot_nich(nes_spot %>% st_set_geometry("g_sys") %>% count(sys_id)) 
-plot_wint(win_spot %>% st_set_geometry("g_sys") %>% count(sys_id))
+win_spot %>% 
+  filter(dist_alloc_km < 100,
+         dist_pt_km < 10 | dist_wb_km < 10) %>% 
+  ggplot(aes(x = dist_pt_km, y = dist_wb_km, color = dist_alloc_km)) +
+  geom_point()
 
-rm()
-cont5 %>% 
-  filter(dis > 0.5) %>% 
-  select(win_loc, wb_id, sys_id, sys_n, sys_type, dis) %>% 
-  arrange(desc(dis)) -> big
+seecol(usecol(pal_pinky, n = 7))
+
+win_spot %>% 
+  count(sys_id) %>%
+  rowwise() %>% 
+  mutate(tibble(n, lv = c(1, 2, 5, 10, 20, 50, 100)) %>% 
+           rowid_to_column("lv_id") %>% 
+           filter(lv >= n) %>% slice(1)) %>% 
+  ungroup() %>% 
+  mutate(col = usecol(pal_pinky, n = n_distinct(lv))[lv_id]) %>% 
+  left_join(sys_b) %>% 
+  st_set_geometry("g_sys") %>% 
+  plot_leaf()
+  
+win_spot %>% 
+  filter(dist_alloc_km > 1) %>% 
+  count(sys_id, sys_type) %>% 
+  arrange(desc(n)) %>%
+  rowwise() %>% 
+  mutate(tibble(n, lv = c(1:7)) %>% 
+           rowid_to_column("lv_id") %>% 
+           filter(lv >= n) %>% slice(1)) %>% 
+  ungroup() %>% 
+  mutate(col = usecol(pal_pinky, n = n_distinct(lv))[lv_id]) %>% 
+  left_join(sys_b) %>% 
+  st_set_geometry("g_sys") %>% 
+  plot_leaf(legend = " oiseaux à plus de 1 km")
 
 # ok revoir les masses d'eau CLC pour que les oiseaux tombent aux bons endroits. 
-# trop d'imprécisions pour l'instant. 
+# On peut mieux faire
 
-wat %>% 
+
+# Models Leo ----------------------------------------------------------------------------------
+
+win_spot %>% 
+  filter(nes_reg == "Ouest") %>% 
+  count(ring, sp) %>% 
+  mutate(n = if_else(n > 1, 0, 1)) %>% 
+  count(sp, n)
+
+# proportion de migrants
+win_spot %>% 
+  mutate(mig = if_else(dist_pt_km > 10, 1, 0)) %>%
+  filter(nes_reg == "Ouest") %>% 
+  lme4::glmer(mig ~ sp + (1|ring), data = ., family = binomial(), weights = win_wgt) -> mod_mig
+
+confint(mod_mig)
+
+# distance des migrants
+win_spot %>% 
+  filter(dist_pt_km > 10, 
+         nes_reg == "Ouest") %>% 
+  ggplot(aes(x = dist_pt_km, color = sp, group = sp, fill = sp)) + 
+  geom_density(aes(weight = win_wgt), alpha = .3) +
+  facet_wrap( ~ sp)
+  
+win_spot %>% 
+  filter(dist_pt_km > 10, 
+         nes_reg == "Ouest") %>% 
+  # lme4::glmer(log(dist_pt_km) ~ sp + (1|ring), data = ., weights = win_wgt) %>% 
+  lme4::glmer(dist_pt_km ~ sp + (1|ring), data = ., family = Gamma(link = "log"), weights = win_wgt) -> mod_dis
+
+summary(mod_dis)$varcor$ring %>% attr("stddev") + summary(mod_dis)$varcor %>% attr("sc") -> sig_dis
+1/ (sig_dis^2) -> shape_dis
+exp(summary(mod_dis)$coefficients[1, 1] + sig_dis^2 / 2) / shape_dis -> scale_dis_fer
+exp(summary(mod_dis)$coefficients[1, 1] + summary(mod_dis)$coefficients[2, 1] + sig_dis^2 / 2) / shape_dis -> scale_dis_ful
+
+dgamma(1:1500, shape = shape_dis, scale = scale_dis_fer) %>% plot()
+  
+win_spot %>% 
+  filter(dist_pt_km > 10, 
+         nes_reg == "Ouest") %>% 
+  glm(log(dist_pt_km) ~ sp, data = ., weights = win_wgt) -> mod_dis2
+
+summary(mod_dis2)$varcor$ring %>% attr("stddev") + summary(mod_dis)$varcor %>% attr("sc") -> sig_dis
+1/ (sig_dis^2) -> shape_dis
+exp(summary(mod_dis)$coefficients[1, 1] + sig_dis^2 / 2) / shape_dis -> scale_dis_fer
+exp(summary(mod_dis)$coefficients[1, 1] + summary(mod_dis)$coefficients[2, 1] + sig_dis^2 / 2) / shape_dis -> scale_dis_ful
+
+dgamma(1:1500, shape = shape_dis, scale = scale_dis_fer) %>% plot()
+
+
+
+
+# Poids des types de masses d'eau -------------------------------------------------------------
+
+wat_b %>% 
   left_join(
     cont6 %>% 
       st_drop_geometry() %>% 
