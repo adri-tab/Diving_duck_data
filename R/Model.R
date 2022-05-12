@@ -383,57 +383,125 @@ win_spot %>%
 # On peut mieux faire
 
 
-# Models Leo ----------------------------------------------------------------------------------
+# model data formatting -----------------------------------------------------------------------
 
+# intérêt de l'effet aléatoire
 win_spot %>% 
   filter(nes_reg == "Ouest") %>% 
   count(ring, sp) %>% 
-  mutate(n = if_else(n > 1, 0, 1)) %>% 
+  mutate(n = if_else(n > 1, "n hivers", "1 hiver")) %>% 
   count(sp, n)
 
-# proportion de migrants
+# préparation des données avec et sans répétition par indiv
 win_spot %>% 
-  mutate(mig = if_else(dist_pt_km > 10, 1, 0)) %>%
   filter(nes_reg == "Ouest") %>% 
-  lme4::glmer(mig ~ sp + (1|ring), data = ., family = binomial(), weights = win_wgt) -> mod_mig
+  mutate(mig = if_else(dist_pt_km > 10, 1, 0)) -> data_full
 
-confint(mod_mig)
+data_full %>% 
+  add_count(ring) %>% 
+  group_by(ring) %>%
+  mutate(win_avg = abs(dist_pt_km - mean(dist_pt_km))) %>%
+  arrange(ring, win_avg) %>% 
+  slice(1) -> data_simp
 
-# distance des migrants
-win_spot %>% 
-  filter(dist_pt_km > 10, 
-         nes_reg == "Ouest") %>% 
-  ggplot(aes(x = dist_pt_km, color = sp, group = sp, fill = sp)) + 
-  geom_density(aes(weight = win_wgt), alpha = .3) +
-  facet_wrap( ~ sp)
-  
-win_spot %>% 
-  filter(dist_pt_km > 10, 
-         nes_reg == "Ouest") %>% 
-  # lme4::glmer(log(dist_pt_km) ~ sp + (1|ring), data = ., weights = win_wgt) %>% 
-  lme4::glmer(dist_pt_km ~ sp + (1|ring), data = ., family = Gamma(link = "log"), weights = win_wgt) -> mod_dis
+data_full %>% 
+  filter(mig == 1, 
+         dist_pt_km < 2000) -> data_full2
 
-summary(mod_dis)$varcor$ring %>% attr("stddev") + summary(mod_dis)$varcor %>% attr("sc") -> sig_dis
-1/ (sig_dis^2) -> shape_dis
-exp(summary(mod_dis)$coefficients[1, 1] + sig_dis^2 / 2) / shape_dis -> scale_dis_fer
-exp(summary(mod_dis)$coefficients[1, 1] + summary(mod_dis)$coefficients[2, 1] + sig_dis^2 / 2) / shape_dis -> scale_dis_ful
+data_simp %>% 
+  filter(mig == 1, 
+         dist_pt_km < 2000) -> data_simp2
 
-dgamma(1:1500, shape = shape_dis, scale = scale_dis_fer) %>% plot()
-  
-win_spot %>% 
-  filter(dist_pt_km > 10, 
-         nes_reg == "Ouest") %>% 
-  glm(log(dist_pt_km) ~ sp, data = ., weights = win_wgt) -> mod_dis2
+# Model prop migration ------------------------------------------------------------------------
 
-summary(mod_dis2)$varcor$ring %>% attr("stddev") + summary(mod_dis)$varcor %>% attr("sc") -> sig_dis
-1/ (sig_dis^2) -> shape_dis
-exp(summary(mod_dis)$coefficients[1, 1] + sig_dis^2 / 2) / shape_dis -> scale_dis_fer
-exp(summary(mod_dis)$coefficients[1, 1] + summary(mod_dis)$coefficients[2, 1] + sig_dis^2 / 2) / shape_dis -> scale_dis_ful
+# fit
+glm(mig ~ sp, data = data_simp, family = binomial(), weights = win_wgt) -> mod_mig
 
-dgamma(1:1500, shape = shape_dis, scale = scale_dis_fer) %>% plot()
+lme4::glmer(mig ~ sp + (1|ring), data = data_full, 
+            family = binomial(), weights = win_wgt) -> mod_rand_mig
+
+# Residuals distribution
+tibble(x = residuals(mod_mig)) %>% 
+  ggplot(aes(sample = x)) + 
+  # geom_histogram(aes(x = x))
+  geom_qq_line() +
+  geom_qq()
+
+tibble(x = residuals(mod_rand_mig)) %>% 
+  ggplot(aes(sample = x)) + 
+  # geom_histogram(aes(x = x))
+  geom_qq_line() +
+  geom_qq()
+
+# Predicts
+data_full %>% 
+  distinct(sp) %>% 
+  mutate(fit = predict(mod_mig, type = "response", newdata = .),
+         se_fit = predict(mod_mig, type = "response", newdata = ., se.fit = TRUE)$se.fit,
+         conf_fit_low = fit - 1.96 * se_fit,
+         conf_fit_high = fit + 1.96 * se_fit) %>% 
+  select(-se_fit)
+
+predict(mod_rand_mig, type = "response")
 
 
+# Model distance ------------------------------------------------------------------------------
 
+data_simp2 %>% 
+  ggplot(aes(x = dist_pt_km, color = sp, group = sp, fill = sp, weight = win_wgt)) + 
+  geom_density(alpha = 0, linetype = 2, adjust = 2, show.legend = FALSE) +
+  geom_histogram(aes(y = ..density..), alpha = .3, bins = 10, show.legend = FALSE, boundary = 0) +
+  scale_x_continuous(n.breaks = 10) +
+  facet_wrap( ~ sp, scales = "free_y", ncol = 1)
+
+glm(data = data_simp2, dist_pt_km ~ sp, family = Gamma(link = "log"), weights = win_wgt) -> mod_dis
+lme4::glmer(data = data_full2, dist_pt_km ~ sp + (1|ring), 
+            family = Gamma(link = "log"), weights = win_wgt) -> mod_rand_dis
+
+# Residuals distribution
+tibble(x = residuals(mod_dis)) %>% 
+  ggplot(aes(sample = x)) + 
+  # geom_histogram(aes(x = x))
+  geom_qq_line() +
+  geom_qq()
+
+tibble(x = residuals(mod_rand_dis)) %>% 
+  ggplot(aes(sample = x)) + 
+  # geom_histogram(aes(x = x))
+  geom_qq_line() +
+  geom_qq()
+
+# Predicts
+data_full2 %>% 
+  distinct(sp) %>% 
+  mutate(fit = predict(mod_dis, type = "response", newdata = .),
+         se_fit = predict(mod_dis, type = "response", newdata = ., se.fit = TRUE)$se.fit,
+         conf_fit_low = fit - 1.96 * se_fit,
+         conf_fit_high = fit + 1.96 * se_fit) %>% 
+  select(-se_fit)
+
+predict(mod_rand_dis, type = "response")
+
+exp(coef(mod_dis)[1]) -> med_fer
+exp(sum(coef(mod_dis))) -> med_ful
+summary(mod_dis)$dispersion -> disp
+
+bind_rows(
+  tibble(
+    sp = "AYTFER",
+    val = rgamma(1e5, shape = 1 / disp, rate = 1 / (disp * med_fer))),
+  tibble(
+    sp = "AYTFUL",
+    val = rgamma(1e5, shape = 1 / disp, rate = 1 / (disp * med_ful)))) %>% 
+  filter(val < 2000) -> mod_dis_sim 
+
+ggplot() + 
+  geom_histogram(data = data_simp2, 
+                 aes(x = dist_pt_km, y = ..density.., color = sp, fill = sp, weight = win_wgt),
+                 alpha = .3, bins = 13, show.legend = FALSE, boundary = 0) +
+  scale_x_continuous(n.breaks = 10) +
+  geom_density(data = mod_dis_sim, aes(x = val, color = sp), linetype = "dashed", show.legend = FALSE) +
+  facet_wrap( ~ sp, scales = "free_y", ncol = 1)
 
 # Poids des types de masses d'eau -------------------------------------------------------------
 
