@@ -168,14 +168,14 @@ cont3 %>%
          angle_deg, dist_pt_km, 
          win_date = datetime, win_loc, 
          nes_date = n_datetime, nes_loc,
-         win_co = co, win_wgt = wgt, nes_dpt, nes_reg) -> cont4
+         win_co = co, wgt_co = wgt, nes_dpt, nes_reg) -> cont4
 
 # Explo direction et angle  ----------------------------------------------------------
 
 cont4 %>% 
   filter(dist_pt_km > 10, sex != "ind") %>% 
   ggplot(aes(x = dist_pt_km, color = sp, group = sp, fill = sp)) + 
-  geom_density(aes(weight = win_wgt), alpha = .3) +
+  geom_density(aes(weight = wgt_co), alpha = .3) +
   facet_wrap(sex ~ sp)
 # en moyenne les oiseaux se distribuent selon une loi gamma
 
@@ -195,7 +195,7 @@ cont4 %>%
   filter(dist_pt_km > 10) %>% 
   ggplot(aes(x = angle_deg, color = sp, group = sp, fill = sp)) + 
   # geom_histogram(binwidth = 22.5, boundary = -180, alpha = .3) +
-  geom_density(alpha = .3, aes(weight = win_wgt)) +
+  geom_density(alpha = .3, aes(weight = wgt_co)) +
   coord_polar(direction = - 1, start = pi/2) +
   scale_x_continuous(limits = c(-180, 180), 
                      breaks = seq(-90, 180, length.out = 4),
@@ -383,7 +383,7 @@ win_spot %>%
 # On peut mieux faire
 
 
-# model data formatting -----------------------------------------------------------------------
+# Model data formatting -----------------------------------------------------------------------
 
 # intérêt de l'effet aléatoire
 win_spot %>% 
@@ -415,10 +415,10 @@ data_simp %>%
 # Model prop migration ------------------------------------------------------------------------
 
 # fit
-glm(mig ~ sp, data = data_simp, family = binomial(), weights = win_wgt) -> mod_mig
+glm(mig ~ sp, data = data_simp, family = binomial(), weights = wgt_co) -> mod_mig
 
 lme4::glmer(mig ~ sp + (1|ring), data = data_full, 
-            family = binomial(), weights = win_wgt) -> mod_rand_mig
+            family = binomial(), weights = wgt_co) -> mod_rand_mig
 
 # Residuals distribution
 tibble(x = residuals(mod_mig)) %>% 
@@ -444,19 +444,18 @@ data_full %>%
 
 predict(mod_rand_mig, type = "response")
 
-
 # Model distance ------------------------------------------------------------------------------
 
 data_simp2 %>% 
-  ggplot(aes(x = dist_pt_km, color = sp, group = sp, fill = sp, weight = win_wgt)) + 
+  ggplot(aes(x = dist_pt_km, color = sp, group = sp, fill = sp, weight = wgt_co)) + 
   geom_density(alpha = 0, linetype = 2, adjust = 2, show.legend = FALSE) +
   geom_histogram(aes(y = ..density..), alpha = .3, bins = 10, show.legend = FALSE, boundary = 0) +
   scale_x_continuous(n.breaks = 10) +
   facet_wrap( ~ sp, scales = "free_y", ncol = 1)
 
-glm(data = data_simp2, dist_pt_km ~ sp, family = Gamma(link = "log"), weights = win_wgt) -> mod_dis
+glm(data = data_simp2, dist_pt_km ~ sp, family = Gamma(link = "log"), weights = wgt_co) -> mod_dis
 lme4::glmer(data = data_full2, dist_pt_km ~ sp + (1|ring), 
-            family = Gamma(link = "log"), weights = win_wgt) -> mod_rand_dis
+            family = Gamma(link = "log"), weights = wgt_co) -> mod_rand_dis
 
 # Residuals distribution
 tibble(x = residuals(mod_dis)) %>% 
@@ -497,56 +496,79 @@ bind_rows(
 
 ggplot() + 
   geom_histogram(data = data_simp2, 
-                 aes(x = dist_pt_km, y = ..density.., color = sp, fill = sp, weight = win_wgt),
+                 aes(x = dist_pt_km, y = ..density.., color = sp, fill = sp, weight = wgt_co),
                  alpha = .3, bins = 13, show.legend = FALSE, boundary = 0) +
   scale_x_continuous(n.breaks = 10) +
-  geom_density(data = mod_dis_sim, aes(x = val, color = sp), linetype = "dashed", show.legend = FALSE) +
+  geom_density(data = mod_dis_sim, aes(x = val, color = sp), 
+               linetype = "dashed", show.legend = FALSE) +
   facet_wrap( ~ sp, scales = "free_y", ncol = 1)
 
-# Poids des types de masses d'eau -------------------------------------------------------------
+# Poids associé aux caractéristiques des masses d'eau -----------------------------------------
 
-wat_b %>% 
-  left_join(
-    cont6 %>% 
+win_spot %>% 
+  distinct(wb_area_ha) %>% 
+  mutate(status = "occupied") %>% 
+  bind_rows(
+    wat_b %>% 
       st_drop_geometry() %>% 
-      distinct(rowid) %>% 
-      mutate(occupied = TRUE)) %>% 
-  filter(occupied == TRUE) %>% 
-  glm(log(wb_area_ha) ~ 1, data = ., family = gaussian()) %>% 
-  residuals() %>% 
-  qqnorm()
-# impossible à modéliser simplement, on passe par les quantiles
+      select(wb_area_ha) %>% 
+      mutate(status = "all")
+  ) %>% 
+  ggplot(aes(x = wb_area_ha, fill = status, color = status)) + 
+  geom_histogram(boundary = 0, alpha = 0.5) +
+  scale_x_log10() +
+  facet_wrap(~ status, ncol = 1, scales = "free_y")
 
-plot_wint(cont6 %>% count(rowid))
+# distribution pourries des sites occupés, 
+# pas de modélisation possible
+# donc on pondère par la méthode des quantiles
 
-water %>% 
-  as_tibble() %>% 
-  slice(st_nearest_feature(cont4, water)) %>% 
-  pull(area) %>% 
-  quantile(seq(0, 1, length.out = 10)) %>% 
+win_spot %>% 
+  pull(wb_area_ha) %>% 
+  quantile(seq(0, 1, length.out = 8)) %>% 
   as_tibble_col(column_name = "down") %>% 
   add_row(down = 0, .before = 1) %>% 
   mutate(
-    up = c(down[-1] - 1e-6, max(water$area) + 1),
+    up = c(down[-1] - 1e-6, max(wat_b$wb_area_ha) + 1),
     down = down,
     wgt = c(0, rep(1, nrow(.) - 2), 0)) %>% 
   rowid_to_column("id") -> occup
 
-water %>% 
+wat_b %>% 
   as_tibble() %>% 
-  select(rowid, area) %>% 
+  select(wb_id, wb_area_ha) %>% 
   rowwise() %>% 
   mutate(id = which(
     (cbind(
-      as.numeric(occup$down <= area), 
-      as.numeric(occup$up >= area)) %>% 
+      as.numeric(occup$down <= wb_area_ha), 
+      as.numeric(occup$up >= wb_area_ha)) %>% 
        rowSums()) == 2)) %>% 
-  ungroup() -> cat_wb
+  select(-wb_area_ha) %>% 
+  add_count(id) %>% 
+  group_by(id, n) %>% 
+  nest() %>% 
+  right_join(occup) %>% 
+  arrange(id) %>% 
+  mutate(wgt_area = wgt / n) %>% 
+  unnest(data) %>% 
+  ungroup() %>% 
+  select(wb_id, wgt_area) %>% 
+  left_join(
+    wat_b %>% 
+      as_tibble() %>% 
+      mutate(g_wb = st_centroid(g_wb))) %>% 
+  select(wb_id, wgt_area, g_wb) -> cat_wb
 
-occup %>% 
-  left_join(cat_wb %>% count(id)) %>% 
-  mutate(wgt = wgt / n,
-         wgt = wgt / sum(wgt))
+# Poids associé à la distance aux oiseaux -----------------------------------------------------
+
+win_spot %>% 
+  nest(bird = - nes_loc) %>% 
+  mutate(wb_cat = list(cat_wb),
+         gamma)
+  
+
+# Combinaison des poids "pays", "caractéristiques", "distance" --------------------------------
+
 
   
   
