@@ -11,6 +11,8 @@ require(leaflet)
 require(htmlwidgets)
 require(stars)
 require(unikn)
+require(rnaturalearth)
+require(dtplyr)
 
 options(viewer = NULL) 
 
@@ -353,6 +355,9 @@ win_spot %>%
 
 seecol(usecol(pal_pinky, n = 7))
 
+
+# Leaflet mapping -----------------------------------------------------------------------------
+
 win_spot %>% 
   count(sys_id) %>%
   rowwise() %>% 
@@ -439,8 +444,7 @@ data_full %>%
   mutate(fit = predict(mod_mig, type = "response", newdata = .),
          se_fit = predict(mod_mig, type = "response", newdata = ., se.fit = TRUE)$se.fit,
          conf_fit_low = fit - 1.96 * se_fit,
-         conf_fit_high = fit + 1.96 * se_fit) %>% 
-  select(-se_fit)
+         conf_fit_high = fit + 1.96 * se_fit) -> mig_prob
 
 predict(mod_rand_mig, type = "response")
 
@@ -476,8 +480,7 @@ data_full2 %>%
   mutate(fit = predict(mod_dis, type = "response", newdata = .),
          se_fit = predict(mod_dis, type = "response", newdata = ., se.fit = TRUE)$se.fit,
          conf_fit_low = fit - 1.96 * se_fit,
-         conf_fit_high = fit + 1.96 * se_fit) %>% 
-  select(-se_fit)
+         conf_fit_high = fit + 1.96 * se_fit)
 
 predict(mod_rand_dis, type = "response")
 
@@ -498,7 +501,7 @@ ggplot() +
   geom_histogram(data = data_simp2, 
                  aes(x = dist_pt_km, y = ..density.., color = sp, fill = sp, weight = wgt_co),
                  alpha = .3, bins = 13, show.legend = FALSE, boundary = 0) +
-  scale_x_continuous(n.breaks = 10) +
+  scale_x_continuous(n.breaks = 10, limits = c(0, 2000)) +
   geom_density(data = mod_dis_sim, aes(x = val, color = sp), 
                linetype = "dashed", show.legend = FALSE) +
   facet_wrap( ~ sp, scales = "free_y", ncol = 1)
@@ -506,7 +509,7 @@ ggplot() +
 # Poids associé aux caractéristiques des masses d'eau -----------------------------------------
 
 win_spot %>% 
-  distinct(wb_area_ha) %>% 
+  select(wb_area_ha) %>% 
   mutate(status = "occupied") %>% 
   bind_rows(
     wat_b %>% 
@@ -557,18 +560,114 @@ wat_b %>%
     wat_b %>% 
       as_tibble() %>% 
       mutate(g_wb = st_centroid(g_wb))) %>% 
-  select(wb_id, wgt_area, g_wb) -> cat_wb
+  select(wb_id, wgt_area, ctr_wb = g_wb) -> cat_wb
+
+# Poids associé à la pression d'observation (par pays) ----------------------------------------
+
+ne_countries(scale = "large", returnclass = "sf") %>% 
+  as_tibble() %>% 
+  filter(continent == "Europe") %>% 
+  select(name, geometry) %>% 
+  mutate(win_co = if_else(name == "United Kingdom",
+                          "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND",
+                          str_to_upper(name))) %>% 
+  select(-name) %>% 
+  inner_join(cont4 %>% 
+               distinct(win_co, wgt_co)) %>% 
+  st_set_geometry("geometry") -> cou
+
+st_join(
+  x = cat_wb %>% 
+    st_set_geometry("ctr_wb"),
+  y = cou %>% 
+    st_set_geometry("geometry"), 
+  join = st_covered_by, 
+  left = TRUE) %>% 
+  mutate(wgt_pres_obs = if_else(is.na(wgt_co), 1, wgt_co)) %>% 
+  select(-c(wgt_co, win_co)) -> cat_wb2
 
 # Poids associé à la distance aux oiseaux -----------------------------------------------------
 
-win_spot %>% 
-  nest(bird = - nes_loc) %>% 
-  mutate(wb_cat = list(cat_wb),
-         gamma)
-  
+nes_spot %>%
+  filter(ring %in% data_simp2$ring) %>%
+  mutate(g_wb = st_centroid(g_wb),
+         n_lon = st_coordinates(g_wb)[, 1],
+         n_lat = st_coordinates(g_wb)[, 2]) %>%
+  select(ring, sp, nes_loc = g_wb, n_lon, n_lat) %>%
+  nest(rings = ring) %>% 
+  mutate(n = map_int(rings, nrow)) %>% 
+  left_join(
+    tibble(
+      sp = unique(win_spot$sp),
+      shape_dis = 1 / disp,
+      rate_dis = 1 / (disp * c(med_fer, med_ful)))) %>%
+  mutate(cat_wb = list(
+    cat_wb2 %>%
+      filter(wgt_area != 0) %>% 
+      mutate(lon = st_coordinates(ctr_wb)[, 1],
+             lat = st_coordinates(ctr_wb)[, 2]) %>%
+      as_tibble())) %>%
+  rowid_to_column() %>% 
+  split(~ rowid) %>% 
+  map(~ .x %>% 
+  lazy_dt() %>% 
+  mutate(cat_wb = cat_wb %>% 
+           map(~ .x %>% 
+                 mutate(
+                   dist_km = st_distance(nes_loc, ctr_wb, by_element = TRUE) %>%
+                     units::drop_units() %>% "*"(1e-3),
+                   wgt_dis = dgamma(dist_km, shape = shape_dis, rate = rate_dis),
+                   angle_deg = atan2(lat - n_lat, lon - n_lon) * 180/pi,
+                   wgt = wgt_area * wgt_pres_obs * wgt_dis
+                 ) %>% 
+                 select(wb_id, wgt, angle_deg, dist_km))) %>% 
+  as_tibble()) -> data_for_sim
 
-# Combinaison des poids "pays", "caractéristiques", "distance" --------------------------------
+# tirage prenant en compte les "caractéristiques", "pression d'obs", "distance" ------------------
 
+data_simp2 %>% 
+  ggplot(aes(x = angle_deg, color = sp, group = sp, fill = sp)) + 
+  # geom_histogram(binwidth = 22.5, boundary = -180, alpha = .3) +
+  geom_density(alpha = .3, aes(weight = wgt_co)) +
+  coord_polar(direction = - 1, start = pi/2) +
+  scale_x_continuous(limits = c(-180, 180), 
+                     breaks = seq(-90, 180, length.out = 4),
+                     labels = c("S", "E", "N", "W")) +
+  facet_grid( ~ sp)
 
+1:100 %>% 
+  map(function(i) {
+    data_for_sim %>% 
+      map(~ .x %>% 
+            select(sp, nes_loc, rings, n, cat_wb) %>% 
+            mutate(angle_deg = cat_wb %>% 
+                     map(~ sample(
+                       x = .x$angle_deg, 
+                       size = n, 
+                       replace = TRUE, 
+                       prob = .x$wgt))) %>% 
+            select(-cat_wb)) %>% 
+      bind_rows() %>% 
+      unnest(c(angle_deg, rings)) %>% 
+      select(sp, ring, angle_deg) %>% 
+      mutate(migration = "potential",
+             id = i)}) %>% 
+  bind_rows() %>% 
+  bind_rows(data_simp2 %>% 
+              mutate(migration = "realized",
+                     id = 0) %>% 
+              select(sp, ring, angle_deg, migration, id, wgt_co), .) %>% 
+  mutate(across(wgt_co, ~ if_else(is.na(.x), 1, wgt_co))) -> sim
+
+sim %>% 
+  # filter(id %in% c(0, sample(id, 1))) %>% 
+  ggplot(aes(x = angle_deg, color = migration, group = migration, fill = migration)) + 
+  # geom_histogram(binwidth = 22.5, boundary = -180, alpha = .3) +
+  geom_density(alpha = .3, aes(weight = wgt_co), show.legend = FALSE) +
+  coord_polar(direction = - 1, start = pi/2) +
+  scale_x_continuous(limits = c(-180, 180), 
+                     breaks = seq(-90, 180, length.out = 4),
+                     labels = c("S", "E", "N", "W")) +
+  facet_grid(sp ~ migration)
   
   
