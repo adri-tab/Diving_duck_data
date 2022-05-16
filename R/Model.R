@@ -623,7 +623,7 @@ nes_spot %>%
                  select(wb_id, wgt, angle_deg, dist_km))) %>% 
   as_tibble()) -> data_for_sim
 
-# tirage prenant en compte les "caractéristiques", "pression d'obs", "distance" ------------------
+# Tirage prenant en compte les "caractéristiques", "pression d'obs", "distance" ------------------
 
 data_simp2 %>% 
   ggplot(aes(x = angle_deg, color = sp, group = sp, fill = sp)) + 
@@ -635,7 +635,7 @@ data_simp2 %>%
                      labels = c("S", "E", "N", "W")) +
   facet_grid( ~ sp)
 
-1:100 %>% 
+1:1000 %>% 
   map(function(i) {
     data_for_sim %>% 
       map(~ .x %>% 
@@ -654,6 +654,7 @@ data_simp2 %>%
              id = i)}) %>% 
   bind_rows() %>% 
   bind_rows(data_simp2 %>% 
+              ungroup() %>% 
               mutate(migration = "realized",
                      id = 0) %>% 
               select(sp, ring, angle_deg, migration, id, wgt_co), .) %>% 
@@ -669,5 +670,17 @@ sim %>%
                      breaks = seq(-90, 180, length.out = 4),
                      labels = c("S", "E", "N", "W")) +
   facet_grid(sp ~ migration)
+  
+# Tropisme ------------------------------------------------------------------------------------
+
+sim %>% 
+  mutate(angle_rad = angle_deg * pi / 180,
+         `West-East` = cos(angle_rad),
+         `South-North` = sin(angle_rad)) %>% 
+  pivot_longer(cols = c(`West-East`, `South-North`), names_to = "axis", values_to = "proj") %>% 
+  ggplot(aes(x = proj, group = migration, color = migration, fill = migration)) + 
+  geom_vline(xintercept = 0, linetype = "dotted") + 
+  geom_density(alpha = .3) +
+  facet_grid(sp + migration ~ axis)
   
   
