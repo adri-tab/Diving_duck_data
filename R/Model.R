@@ -635,7 +635,7 @@ data_simp2 %>%
                      labels = c("S", "E", "N", "W")) +
   facet_grid( ~ sp)
 
-1:1000 %>% 
+1:5000 %>% 
   map(function(i) {
     data_for_sim %>% 
       map(~ .x %>% 
@@ -690,14 +690,14 @@ trop %>%
 
 trop %>%
   ungroup() %>% 
-  nest(data = -c(sp, id, axis)) %>% 
-  mutate(prop = 
-           data %>% map_dbl(function(x) {
+  group_split(sp, id, axis) %>% 
+  map(function(x) {
              dst = density(x$proj, weights = x$wgt_co, from = -1, to = 1)
              out = tibble(x = dst$x, y = dst$y, bw = dst$bw)
              up = sum(out$y[out$x > 0] * out$bw[out$x > 0]) / sum(out$y * out$bw)
-             return(up)
-           })) -> trop2
+             bind_cols(x %>% distinct(sp, id, axis), tibble(prop = up))
+           }) %>% 
+  bind_rows() -> trop2
 
 ggplot() + 
   geom_density(data = trop2 %>% 
