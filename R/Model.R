@@ -663,7 +663,6 @@ data_simp2 %>%
 sim %>% 
   # filter(id %in% c(0, sample(id, 1))) %>% 
   ggplot(aes(x = angle_deg, color = migration, group = migration, fill = migration)) + 
-  # geom_histogram(binwidth = 22.5, boundary = -180, alpha = .3) +
   geom_density(alpha = .3, aes(weight = wgt_co), show.legend = FALSE) +
   coord_polar(direction = - 1, start = pi/2) +
   scale_x_continuous(limits = c(-180, 180), 
@@ -675,12 +674,50 @@ sim %>%
 
 sim %>% 
   mutate(angle_rad = angle_deg * pi / 180,
-         `West-East` = cos(angle_rad),
-         `South-North` = sin(angle_rad)) %>% 
-  pivot_longer(cols = c(`West-East`, `South-North`), names_to = "axis", values_to = "proj") %>% 
-  ggplot(aes(x = proj, group = migration, color = migration, fill = migration)) + 
+         East = cos(angle_rad),
+         North = sin(angle_rad)) %>% 
+  pivot_longer(cols = c(East, North), 
+               names_to = "axis", values_to = "proj") -> trop
+
+trop %>% 
+  ggplot(aes(x = proj, 
+             color = migration, 
+             fill = migration, 
+             group = migration)) + 
   geom_vline(xintercept = 0, linetype = "dotted") + 
-  geom_density(alpha = .3) +
-  facet_grid(sp + migration ~ axis)
+  geom_density(alpha = .3, aes(weight = wgt_co), adjust = 1) +
+  facet_grid(sp ~ axis)
+
+trop %>%
+  ungroup() %>% 
+  nest(data = -c(sp, id, axis)) %>% 
+  # filter(id %in% c(0:100)) %>% 
+  mutate(density = 
+          data %>% map_dbl(function(x) {
+            dst = density(x$proj, weights = x$wgt_co, from = -1, to = 1)
+            out = tibble(x = dst$x, y = dst$y, bw = dst$bw)
+            up = sum(out$y[out$x > 0] * out$bw[out$x > 0]) / sum(out$y * out$bw)
+            return(up)
+          })) -> trop2
+
+# write_rds(trop2, "./Output/tropisme.rds")
+
+read_rds("./Output/tropisme.rds") -> trop2
+
+ggplot() + 
+  geom_density(data = trop2 %>% 
+                   filter(id != 0),
+                 aes(x = density, color = sp, fill = sp), 
+                 alpha = .3, 
+               adjust = 2, show.legend = FALSE) + 
+  xlim(c(0, 1)) +
+  geom_vline(data = trop2 %>% 
+               filter(id == 0), aes(xintercept = density), linetype = "dotted") +
+  facet_grid(sp ~ axis)
+
+
+# tropisme pour le nord, pas pour l'est
+# on peut faire un test
+  
   
   
