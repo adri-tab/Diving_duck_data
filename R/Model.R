@@ -692,64 +692,41 @@ trop %>%
   ungroup() %>% 
   nest(data = -c(sp, id, axis)) %>% 
   # filter(id %in% c(0:100)) %>% 
-<<<<<<< HEAD
   mutate(prop = 
-=======
-  mutate(density = 
->>>>>>> d24d2575b554873a4ac677914ac475821b0b128e
-          data %>% map_dbl(function(x) {
-            dst = density(x$proj, weights = x$wgt_co, from = -1, to = 1)
-            out = tibble(x = dst$x, y = dst$y, bw = dst$bw)
-            up = sum(out$y[out$x > 0] * out$bw[out$x > 0]) / sum(out$y * out$bw)
-            return(up)
-          })) -> trop2
+           data %>% map_dbl(function(x) {
+             dst = density(x$proj, weights = x$wgt_co, from = -1, to = 1)
+             out = tibble(x = dst$x, y = dst$y, bw = dst$bw)
+             up = sum(out$y[out$x > 0] * out$bw[out$x > 0]) / sum(out$y * out$bw)
+             return(up)
+           })) -> trop2
 
 # write_rds(trop2, "./Output/tropisme.rds")
-<<<<<<< HEAD
 # 
 # read_rds("./Output/tropisme.rds") -> trop2
-=======
 
-read_rds("./Output/tropisme.rds") -> trop2
->>>>>>> d24d2575b554873a4ac677914ac475821b0b128e
 
 ggplot() + 
   geom_density(data = trop2 %>% 
-                   filter(id != 0),
-<<<<<<< HEAD
-                 aes(x = prop, color = sp, fill = sp), 
-=======
-                 aes(x = density, color = sp, fill = sp), 
->>>>>>> d24d2575b554873a4ac677914ac475821b0b128e
-                 alpha = .3, 
+                 filter(id != 0),
+               aes(x = prop, color = sp, fill = sp), 
+               alpha = .3, 
                adjust = 2, show.legend = FALSE) + 
   xlim(c(0, 1)) +
-  geom_vline(data = trop2 %>% 
-<<<<<<< HEAD
-               filter(id == 0), aes(xintercept = prop), linetype = "dotted") +
+  geom_vline(data = trop2 %>% filter(id == 0), aes(xintercept = prop), linetype = "dotted") +
   facet_grid(sp ~ axis)
 
 # tropisme pour le nord, pas pour l'est
 # on peut faire un test
-=======
-               filter(id == 0), aes(xintercept = density), linetype = "dotted") +
-  facet_grid(sp ~ axis)
 
-
-# tropisme pour le nord, pas pour l'est
-# on peut faire un test
-  
->>>>>>> d24d2575b554873a4ac677914ac475821b0b128e
-  
 trop2 %>% 
   filter(id != 0) %>% 
   left_join(trop2 %>% 
               filter(id == 0) %>% 
-              select(sp, axis, realized = density)) %>% 
+              select(sp, axis, realized = prop)) %>% 
   group_by(sp, axis) %>% 
   summarize(realized = unique(realized),
-            s1 = EnvStats::ebeta(density)$parameters[1],
-            s2 = EnvStats::ebeta(density)$parameters[2],
+            s1 = EnvStats::ebeta(prop)$parameters[1],
+            s2 = EnvStats::ebeta(prop)$parameters[2],
             conf_int_low = qbeta(p = 0.025, s1, s2),
             conf_int_high = qbeta(p = 0.975, s1, s2),
             p_critique = integrate(dbeta, 
