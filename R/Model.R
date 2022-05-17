@@ -691,7 +691,6 @@ trop %>%
 trop %>%
   ungroup() %>% 
   nest(data = -c(sp, id, axis)) %>% 
-  # filter(id %in% c(0:100)) %>% 
   mutate(prop = 
            data %>% map_dbl(function(x) {
              dst = density(x$proj, weights = x$wgt_co, from = -1, to = 1)
@@ -699,11 +698,6 @@ trop %>%
              up = sum(out$y[out$x > 0] * out$bw[out$x > 0]) / sum(out$y * out$bw)
              return(up)
            })) -> trop2
-
-# write_rds(trop2, "./Output/tropisme.rds")
-# 
-# read_rds("./Output/tropisme.rds") -> trop2
-
 
 ggplot() + 
   geom_density(data = trop2 %>% 
