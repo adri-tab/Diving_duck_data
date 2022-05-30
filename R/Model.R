@@ -139,19 +139,30 @@ cont2 %>%
 
 # Effort par pays -------------------------------------------------------------------
 
+c(-1.66, 47.1) %>% 
+  st_point() %>% 
+  st_sfc(crs = 4326) %>% 
+  st_buffer(dist = set_units(7, "km")) %>%  
+  st_sf() %>% 
+  mutate(GL = TRUE) -> GLieu
+
+jeu %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  st_join(GLieu, join = st_intersects) %>% 
+  as_tibble() %>% 
+  mutate(co = if_else(is.na(GL), co, "GRAND-LIEU")) %>% 
+  select(id, co) -> jeu_co
+
 cont3 %>% 
   st_drop_geometry() %>% 
-  left_join(
-    jeu %>% 
-      select(id, co)) %>%
+  left_join(jeu_co) %>%
   mutate(wintering_spot = TRUE) %>% 
   select(ring, winter, co, age, wintering_spot) %>% 
   right_join(
     cont2 %>% 
       select(-age) %>% 
-      left_join(
-        jeu %>% 
-          select(id, co))) %>% 
+      left_join(jeu_co)
+    ) %>% 
   filter(wintering_spot == TRUE) %>% 
   count(ring, winter, co, sp, sex, age) %>% 
   group_by(co) %>% 
@@ -159,20 +170,20 @@ cont3 %>%
   arrange(desc(nobs_win)) -> obs_pressure
 
 cont3 %>% 
-  left_join(
-    jeu %>% 
-      select(id, co)) %>% 
-  left_join(obs_pressure %>% mutate(wgt = 1 / nobs_win)) %>%
+  left_join(jeu_co) %>% 
+  left_join(obs_pressure %>% mutate(wgt = 1 / nobs_win,
+                                    pres = nobs_win)) %>%
   mutate(nb = nrow(.), 
-         wgt = nb * wgt / sum(wgt)) %>% 
+         wgt = nb * wgt / sum(wgt),
+         pres = nb * pres / sum(pres)) %>% 
   select(id, obs, ring, sp, sex, age, 
          win = winter,
          angle_deg, dist_pt_km, 
          win_date = datetime, win_loc, 
          nes_date = n_datetime, nes_loc,
-         win_co = co, wgt_co = wgt, nes_dpt, nes_reg) -> cont4
+         win_co = co, wgt_co = wgt, pres_co = pres, nes_dpt, nes_reg) -> cont4
 
-# Explo direction et angle  ----------------------------------------------------------
+# Explo direction et angle  ---------------------------------------------------------
 
 cont4 %>% 
   filter(dist_pt_km > 10, sex != "ind") %>% 
@@ -206,7 +217,7 @@ cont4 %>%
 # ils ne se dirigent pas préférentiellement au sud
 
 
-# Corine Land Cover manip ---------------------------------------------------------------------
+# Corine Land Cover manip -----------------------------------------------------------
 
 # 411 inland marshes
 # 412 peat bogs
@@ -353,10 +364,10 @@ win_spot %>%
   ggplot(aes(x = dist_pt_km, y = dist_wb_km, color = dist_alloc_km)) +
   geom_point()
 
-seecol(usecol(pal_pinky, n = 7))
+seecol(pal_pinky, n = 7)
 
 
-# Leaflet mapping -----------------------------------------------------------------------------
+# Leaflet mapping -------------------------------------------------------------------
 
 win_spot %>% 
   count(sys_id) %>%
@@ -388,7 +399,7 @@ win_spot %>%
 # On peut mieux faire
 
 
-# Model data formatting -----------------------------------------------------------------------
+# Model data formatting -------------------------------------------------------------
 
 # intérêt de l'effet aléatoire
 win_spot %>% 
@@ -417,7 +428,7 @@ data_simp %>%
   filter(mig == 1, 
          dist_pt_km < 2000) -> data_simp2
 
-# Model prop migration ------------------------------------------------------------------------
+# Model prop migration --------------------------------------------------------------
 
 # fit
 glm(mig ~ sp, data = data_simp, family = binomial(), weights = wgt_co) -> mod_mig
@@ -448,7 +459,7 @@ data_full %>%
 
 predict(mod_rand_mig, type = "response")
 
-# Model distance ------------------------------------------------------------------------------
+# Model distance -------------------------------------------------------------------
 
 data_simp2 %>% 
   ggplot(aes(x = dist_pt_km, color = sp, group = sp, fill = sp, weight = wgt_co)) + 
@@ -502,22 +513,24 @@ ggplot() +
                  aes(x = dist_pt_km, y = ..density.., color = sp, fill = sp, weight = wgt_co),
                  alpha = .3, bins = 13, show.legend = FALSE, boundary = 0) +
   scale_x_continuous(n.breaks = 10, limits = c(0, 2000)) +
-  geom_density(data = mod_dis_sim, aes(x = val, color = sp), 
+  geom_density(data = mod_dis_sim, 
+               aes(x = val, color = sp), 
                linetype = "dashed", show.legend = FALSE) +
   facet_wrap( ~ sp, scales = "free_y", ncol = 1)
 
-# Poids associé aux caractéristiques des masses d'eau -----------------------------------------
+# Poids associé aux caractéristiques des masses d'eau --------------------
 
 win_spot %>% 
-  select(wb_area_ha) %>% 
+  select(wb_area_ha, wgt_co) %>% 
   mutate(status = "occupied") %>% 
   bind_rows(
     wat_b %>% 
       st_drop_geometry() %>% 
       select(wb_area_ha) %>% 
-      mutate(status = "all")
+      mutate(status = "all", 
+             wgt_co = 1)
   ) %>% 
-  ggplot(aes(x = wb_area_ha, fill = status, color = status)) + 
+  ggplot(aes(x = wb_area_ha, fill = status, color = status, weight = wgt_co)) + 
   geom_histogram(boundary = 0, alpha = 0.5) +
   scale_x_log10() +
   facet_wrap(~ status, ncol = 1, scales = "free_y")
@@ -562,19 +575,40 @@ wat_b %>%
       mutate(g_wb = st_centroid(g_wb))) %>% 
   select(wb_id, wgt_area, ctr_wb = g_wb) -> cat_wb
 
-# Poids associé à la pression d'observation (par pays) ----------------------------------------
+
+# N'EST PLUS UTILISE - Poids associé à la pression d'observation (par pays et Grand Lieu) ----
 
 ne_countries(scale = "large", returnclass = "sf") %>% 
+  st_transform(4326) %>% 
   as_tibble() %>% 
   filter(continent == "Europe") %>% 
   select(name, geometry) %>% 
   mutate(win_co = if_else(name == "United Kingdom",
                           "U.K. OF GREAT BRITAIN AND NORTHERN IRELAND",
                           str_to_upper(name))) %>% 
-  select(-name) %>% 
+  select(-name) -> cou_tmp
+
+cou_tmp %>% 
+  filter(win_co != "FRANCE") %>% 
+  bind_rows(
+    st_combine(c(cou_tmp %>% filter(win_co == "FRANCE") %>% pull(geometry), GLieu$geometry)) %>% 
+      st_sf() %>% mutate(win_co = "FRANCE"),
+    GLieu %>% mutate(win_co = "GRAND-LIEU") %>% select(-GL) %>% st_cast("MULTIPOLYGON")) %>% 
   inner_join(cont4 %>% 
-               distinct(win_co, wgt_co)) %>% 
+               distinct(win_co, wgt_co, pres_co)) %>% 
   st_set_geometry("geometry") -> cou
+
+map_base %>% 
+  addPolygons(
+    data = cou %>% mutate(col = usecol(pal_unikn_pref, n = nrow(.))),
+    fillColor = ~ col,
+    fillOpacity = 0.7, 
+    color = ~ col, 
+    weight = 1, 
+    group = ~ win_co) %>% 
+  addLayersControl(
+    overlayGroups = cou %>% as_tibble() %>% pull(win_co),
+    options = layersControlOptions(collapsed = FALSE))
 
 st_join(
   x = cat_wb %>% 
@@ -583,10 +617,10 @@ st_join(
     st_set_geometry("geometry"), 
   join = st_covered_by, 
   left = TRUE) %>% 
-  mutate(wgt_pres_obs = if_else(is.na(wgt_co), 1, wgt_co)) %>% 
-  select(-c(wgt_co, win_co)) -> cat_wb2
+  mutate(wgt_pres = if_else(is.na(pres_co), 1, pres_co)) %>% 
+  select(-c(wgt_co, win_co, pres_co)) -> cat_wb2
 
-# Poids associé à la distance aux oiseaux -----------------------------------------------------
+# Poids associé à la distance aux oiseaux ---------------------------------------
 
 nes_spot %>%
   filter(ring %in% data_simp2$ring) %>%
@@ -602,7 +636,7 @@ nes_spot %>%
       shape_dis = 1 / disp,
       rate_dis = 1 / (disp * c(med_fer, med_ful)))) %>%
   mutate(cat_wb = list(
-    cat_wb2 %>%
+    cat_wb %>%
       filter(wgt_area != 0) %>% 
       mutate(lon = st_coordinates(ctr_wb)[, 1],
              lat = st_coordinates(ctr_wb)[, 2]) %>%
@@ -618,12 +652,12 @@ nes_spot %>%
                      units::drop_units() %>% "*"(1e-3),
                    wgt_dis = dgamma(dist_km, shape = shape_dis, rate = rate_dis),
                    angle_deg = atan2(lat - n_lat, lon - n_lon) * 180/pi,
-                   wgt = wgt_area * wgt_pres_obs * wgt_dis
+                   wgt = wgt_area * wgt_dis
                  ) %>% 
                  select(wb_id, wgt, angle_deg, dist_km))) %>% 
   as_tibble()) -> data_for_sim
 
-# Tirage prenant en compte les "caractéristiques", "pression d'obs", "distance" ------------------
+# Tirage prenant en compte les "caractéristiques intrinsèques" et la "distance" -----
 
 data_simp2 %>% 
   ggplot(aes(x = angle_deg, color = sp, group = sp, fill = sp)) + 
@@ -635,7 +669,7 @@ data_simp2 %>%
                      labels = c("S", "E", "N", "W")) +
   facet_grid( ~ sp)
 
-1:5000 %>% 
+1:1000 %>% 
   map(function(i) {
     data_for_sim %>% 
       map(~ .x %>% 
@@ -670,7 +704,7 @@ sim %>%
                      labels = c("S", "E", "N", "W")) +
   facet_grid(sp ~ migration)
   
-# Tropisme ------------------------------------------------------------------------------------
+# Tropisme -----------------------------------------------------------------------
 
 sim %>% 
   mutate(angle_rad = angle_deg * pi / 180,
