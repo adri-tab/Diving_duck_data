@@ -16,6 +16,23 @@ require(dtplyr)
 
 options(viewer = NULL) 
 
+# Great circle azimuth bearing function -----------------------------------------------
+
+# https://www.igismap.com/formula-to-find-bearing-or-heading-angle-between-two-points-latitude-longitude/
+
+bearing_fun <- function(x1, x2, y1, y2) {
+ atan2(
+   cos(y2 * pi / 180) * sin((x2 - x1) * pi / 180), 
+   cos(y1 * pi / 180) * sin(y2 * pi / 180) - 
+     sin(y1 * pi / 180) * cos(y2 * pi / 180) * cos((x2 - x1) * pi / 180)) * 
+    180 / pi
+}
+
+basic_fun <- function(x1, x2, y1, y2) {
+  atan2(x2 - x1, y2 - y1) * 
+    180 / pi
+}
+
 # Leaflet function ------------------------------------------------------------------
 
 leaflet() %>%
@@ -127,7 +144,8 @@ cont2 %>%
   rename(win_loc = geometry) %>% 
   left_join(ring_sel %>% 
               select(ring, n_datetime = datetime, n_lon, n_lat, nes_loc, nes_reg)) %>% 
-  mutate(angle_deg = atan2(lat - n_lat, lon - n_lon) * 180/pi) %>% 
+  mutate(angle_deg = bearing_fun(x1 = n_lon, x2 = lon, y1 = n_lat, y2 = lat),
+         angle_deg_base = basic_fun(x1 = n_lon, x2 = lon, y1 = n_lat, y2 = lat)) %>% 
   rowwise() %>% 
   mutate(dist_pt_km = st_distance(nes_loc, win_loc, by_element = TRUE) %>% 
            drop_units() %>% "*"(1e-3),
@@ -178,7 +196,7 @@ cont3 %>%
          pres = nb * pres / sum(pres)) %>% 
   select(id, obs, ring, sp, sex, age, 
          win = winter,
-         angle_deg, dist_pt_km, 
+         angle_deg, angle_deg_base, dist_pt_km, 
          win_date = datetime, win_loc, 
          nes_date = n_datetime, nes_loc,
          win_co = co, wgt_co = wgt, pres_co = pres, nes_dpt, nes_reg) -> cont4
@@ -197,11 +215,11 @@ cont4 %>%
   ggplot(aes(x = angle_deg, y = dist_pt_km)) +
   geom_point() +
   geom_smooth(method = "gam") + 
-  coord_polar(start = pi/2, direction = -1) +
+  coord_polar(start = pi) +
   ylim(c(0, 1500)) +
   scale_x_continuous(limits = c(-180, 180), 
                      breaks = seq(-90, 180, length.out = 4),
-                     labels = c("S", "E", "N", "W"))
+                     labels = c("W", "N", "E", "S"))
 # -> les oiseaux vont plus loin direction sud ouest depuis leur site de nidif
 
 cont4 %>% 
@@ -209,10 +227,10 @@ cont4 %>%
   ggplot(aes(x = angle_deg, color = sp, group = sp, fill = sp)) + 
   # geom_histogram(binwidth = 22.5, boundary = -180, alpha = .3) +
   geom_density(alpha = .3, aes(weight = wgt_co)) +
-  coord_polar(direction = - 1, start = pi/2) +
+  coord_polar(start = pi) +
   scale_x_continuous(limits = c(-180, 180), 
                      breaks = seq(-90, 180, length.out = 4),
-                     labels = c("S", "E", "N", "W")) +
+                     labels = c("W", "N", "E", "S")) +
   facet_grid(nes_reg ~ sp)
 # ils ne se dirigent pas préférentiellement au sud
 
@@ -418,7 +436,8 @@ data_full %>%
   group_by(ring) %>%
   mutate(win_avg = abs(dist_pt_km - mean(dist_pt_km))) %>%
   arrange(ring, win_avg) %>% 
-  slice(1) -> data_simp
+  slice(1) %>% 
+  ungroup() -> data_simp
 
 data_full %>% 
   filter(mig == 1, 
@@ -651,10 +670,11 @@ nes_spot %>%
                    dist_km = st_distance(nes_loc, ctr_wb, by_element = TRUE) %>%
                      units::drop_units() %>% "*"(1e-3),
                    wgt_dis = dgamma(dist_km, shape = shape_dis, rate = rate_dis),
-                   angle_deg = atan2(lat - n_lat, lon - n_lon) * 180/pi,
+                   angle_deg = bearing_fun(x1 = n_lon, x2 = lon, y1 = n_lat, y2 = lat),
+                   angle_deg_base = basic_fun(x1 = n_lon, x2 = lon, y1 = n_lat, y2 = lat),
                    wgt = wgt_area * wgt_dis
                  ) %>% 
-                 select(wb_id, wgt, angle_deg, dist_km))) %>% 
+                 select(wb_id, wgt, angle_deg, angle_deg_base, dist_km))) %>% 
   as_tibble()) -> data_for_sim
 
 # Tirage prenant en compte les "caractéristiques intrinsèques" et la "distance" -----
@@ -663,15 +683,16 @@ data_simp2 %>%
   ggplot(aes(x = angle_deg, color = sp, group = sp, fill = sp)) + 
   # geom_histogram(binwidth = 22.5, boundary = -180, alpha = .3) +
   geom_density(alpha = .3, aes(weight = wgt_co)) +
-  coord_polar(direction = - 1, start = pi/2) +
+  coord_polar(start = pi) +
   scale_x_continuous(limits = c(-180, 180), 
                      breaks = seq(-90, 180, length.out = 4),
-                     labels = c("S", "E", "N", "W")) +
+                     labels = c("W", "N", "E", "S")) +
   facet_grid( ~ sp)
 
-1:1000 %>% 
+1:1e3 %>% 
   map(function(i) {
     data_for_sim %>% 
+      # '['(1) %>% 
       map(~ .x %>% 
             select(sp, nes_loc, rings, n, cat_wb) %>% 
             mutate(angle_deg = cat_wb %>% 
@@ -689,27 +710,39 @@ data_simp2 %>%
   bind_rows() %>% 
   bind_rows(data_simp2 %>% 
               ungroup() %>% 
+              # filter(nes_dpt == 44) %>% 
               mutate(migration = "realized",
                      id = 0) %>% 
               select(sp, ring, angle_deg, migration, id, wgt_co), .) %>% 
   mutate(across(wgt_co, ~ if_else(is.na(.x), 1, wgt_co))) -> sim
 
-sim %>% 
-  # filter(id %in% c(0, sample(id, 1))) %>% 
-  ggplot(aes(x = angle_deg, color = migration, group = migration, fill = migration)) + 
-  geom_density(alpha = .3, aes(weight = wgt_co), show.legend = FALSE) +
-  coord_polar(direction = - 1, start = pi/2) +
+bind_rows(sim, sim, sim) %>% 
+  mutate(angle_deg = angle_deg + rep(-1:1, nrow(sim)) %>% sort %>% "*"(360)) %>% 
+  group_split(sp, migration) %>% 
+  map( ~ 
+         .x$angle_deg %>% 
+         density(weight = .x$wgt_co, bw = 12, n = 1000) %>% 
+         "["(1:2) %>% 
+         bind_rows() %>% 
+         set_names("angle_deg", "density") %>% 
+         filter(angle_deg >= -180, angle_deg <= 180) %>% 
+         mutate(density = density / sum(density)) %>% 
+         bind_cols(.x %>% distinct(sp, migration))) %>% 
+  bind_rows() %>% 
+  ggplot(aes(x = angle_deg, y = density, color = migration, group = migration, fill = migration)) + 
+  geom_area(alpha = .3) +
+  coord_polar(start = pi) +
   scale_x_continuous(limits = c(-180, 180), 
                      breaks = seq(-90, 180, length.out = 4),
-                     labels = c("S", "E", "N", "W")) +
-  facet_grid(sp ~ migration)
-  
+                     labels = c("W", "N", "E", "S")) +
+  facet_grid( ~ sp)
+
 # Tropisme -----------------------------------------------------------------------
 
 sim %>% 
   mutate(angle_rad = angle_deg * pi / 180,
-         East = cos(angle_rad),
-         North = sin(angle_rad)) %>% 
+         East = sin(angle_rad),
+         North = cos(angle_rad)) %>% 
   pivot_longer(cols = c(East, North), 
                names_to = "axis", values_to = "proj") -> trop
 
@@ -735,13 +768,25 @@ trop %>%
 
 ggplot() + 
   geom_density(data = trop2 %>% 
-                 filter(id != 0),
+                 filter(id != 0, 
+                        axis == "North"),
                aes(x = prop, color = sp, fill = sp), 
                alpha = .3, 
                adjust = 2, show.legend = FALSE) + 
-  xlim(c(0, 1)) +
-  geom_vline(data = trop2 %>% filter(id == 0), aes(xintercept = prop), linetype = "dotted") +
-  facet_grid(sp ~ axis)
+  scale_x_continuous(limits = c(0, 1), breaks = c(0, .5, 1), labels = c("100%\nsouthward", "50% southward\n50% northward", "100%\nnorthward")) +
+  geom_vline(data = trop2 %>% filter(id == 0, axis == "North"), aes(xintercept = prop), linetype = "dotted") +
+  facet_wrap(~ sp, ncol = 1)
+
+ggplot() + 
+  geom_density(data = trop2 %>% 
+                 filter(id != 0, 
+                        axis == "East"),
+               aes(x = prop, color = sp, fill = sp), 
+               alpha = .3, 
+               adjust = 2, show.legend = FALSE) + 
+  scale_x_continuous(limits = c(0, 1), breaks = c(0, .5, 1), labels = c("100%\nwestward", "50% westward\n50% eastward", "100%\neastward")) +
+  geom_vline(data = trop2 %>% filter(id == 0, axis == "East"), aes(xintercept = prop), linetype = "dotted") +
+  facet_wrap(~ sp, ncol = 1)
 
 # tropisme pour le nord, pas pour l'est
 # on peut faire un test
@@ -759,8 +804,7 @@ trop2 %>%
             conf_int_high = qbeta(p = 0.975, s1, s2),
             p_critique = integrate(dbeta, 
                                    shape1 = s1, shape2 = s2, 
-                                   lower = realized, upper = 1)$value  * 2) %>% 
+                                   lower = realized, upper = 1)$value * 2) %>% 
   ungroup() %>% 
   select(sp, axis, realized, p_critique, conf_int_low, conf_int_high)
 
-  
