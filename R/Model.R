@@ -13,6 +13,7 @@ require(stars)
 require(unikn)
 require(rnaturalearth)
 require(dtplyr)
+require(bpnreg)
 
 options(viewer = NULL) 
 
@@ -536,6 +537,78 @@ ggplot() +
                aes(x = val, color = sp), 
                linetype = "dashed", show.legend = FALSE) +
   facet_wrap( ~ sp, scales = "free_y", ncol = 1)
+
+
+# Model circular ----------------------------------------------------------------------------
+
+data_simp2 %>% 
+  mutate(angle_2pi = if_else(angle_deg < 0, 360 + angle_deg, angle_deg) * pi / 180,
+         across(c(sp, sex), as_factor)) %>% 
+  select(id, angle_2pi, sp, sex, wgt_co) -> azim_data
+
+# bpnr(pred.I = angle_2pi ~ sp,
+#      data = azim_data,
+#      its = 10000, burn = 1000, n.lag = 3) -> azim_mod
+# 
+# bind_rows(
+#   tibble(sp = "AYTFER",
+#          val = circular::rvonmises(
+#            n = 1e5, 
+#            mu = coef_circ(azim_mod, type = "categorical")$Means[1, 1], 
+#            kappa = coef_circ(azim_mod, type = "categorical")$Means[1, 3] ^ (-2))),
+#   tibble(sp = "AYTFUL",
+#          val = circular::rvonmises(
+#            n = 1e5, 
+#            mu = coef_circ(azim_mod, type = "categorical")$Means[2, 1], 
+#            kappa = coef_circ(azim_mod, type = "categorical")$Means[2, 3] ^ (-2)))) %>% 
+#   mutate(val = val %>% as.numeric() %>% "*"(180 / pi) %>% if_else(. > 180, . - 360, .)) -> azim_samp
+# 
+# ggplot() + 
+#   geom_histogram(data = data_simp2,
+#                  aes(x = angle_deg, y = ..density.., color = sp, group = sp, fill = sp),
+#                  binwidth = 20, boundary = -180, alpha = .3, show.legend = FALSE) +
+#   scale_x_continuous(limits = c(-180, 180), 
+#                      breaks = seq(-90, 180, length.out = 4),
+#                      labels = c("W", "N", "E", "S")) +
+#   facet_grid( ~ sp) +
+#   coord_polar(start = pi) +
+#   geom_density(data = azim_samp, 
+#                aes(x = val, color = sp), 
+#                linetype = "dashed", show.legend = FALSE)
+
+to_opt <- function(para = par, data) {
+  -sum(circular::dvonmises(data$angle_2pi, para[1], para[2], log = TRUE) * data$wgt_co)
+}
+
+azim_data %>% 
+  group_split(sp) %>%
+  map(function(x) {
+    mod = optim(par = c(pi/4, 1), 
+                fn = to_opt, 
+                data = x,
+                method = "L-BFGS-B", lower = c(0, 0), upper = c(2 * pi, 1e5))
+    out = bind_cols(
+      x %>% distinct(sp), 
+      tibble(mu = mod$par[1], 
+             kappa = mod$par[2], 
+             val = circular::rvonmises(1e5, mu = mu, kappa = kappa) %>% 
+               as.numeric()) %>% 
+        mutate(across(val, ~ if_else(.x > pi, .x - 2 * pi, .x) * 180 / pi)))
+    return(out)}) %>% 
+  bind_rows() -> azim_samp2
+
+ggplot() + 
+  geom_histogram(data = data_simp2,
+                 aes(x = angle_deg, y = ..density.., color = sp, group = sp, fill = sp, weight = wgt_co),
+                 binwidth = 22.5, boundary = -180, alpha = .3, show.legend = FALSE) +
+  scale_x_continuous(limits = c(-180, 180), 
+                     breaks = seq(-90, 180, length.out = 4),
+                     labels = c("W", "N", "E", "S")) +
+  facet_grid( ~ sp) +
+  coord_polar(start = pi) +
+  geom_density(data = azim_samp2, 
+               aes(x = val, color = sp), 
+               linetype = "dashed", show.legend = FALSE)
 
 # Poids associé aux caractéristiques des masses d'eau --------------------
 
