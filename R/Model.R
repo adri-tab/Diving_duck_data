@@ -1,3 +1,5 @@
+Sys.setlocale("LC_ALL", "English")
+
 # Package loading -------------------------------------------------------------------
 
 require(tidyverse)
