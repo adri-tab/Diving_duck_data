@@ -88,8 +88,8 @@ ds2 %>%
   mutate(coord = st_coordinates(.) %>% as_tibble()) %>% 
   unnest(coord) %>%
   as_tibble() %>% 
-  arrange(sp, month) %>% 
-  add_count(sp, month) %>% 
+  arrange(sp, nes_reg, month) %>% 
+  add_count(sp, nes_reg, month) %>% 
   group_split(nes_reg, sp) %>% 
   map(~ .x %>% 
         mutate(tit = month(datetime, label = TRUE, abbr = FALSE),
@@ -118,8 +118,8 @@ ds2 %>%
       scale_x_continuous(limits = border$X) + 
       scale_y_continuous(limits = border$Y) +
       labs(x = "", y = "", caption = capt) +
-      scale_fill_discrete(name = "density > X% of\nmaximum density", 
-                          labels = c(">1%", ">10%", ">50%", ">80%")) +
+      scale_fill_discrete(name = "Density > X% of\nmaximum density", 
+                          labels = c("> 1%", "> 10%", "> 50%", "> 80%")) +
       facet_wrap(~ head_fig) +
       theme_minimal() -> pl
     
